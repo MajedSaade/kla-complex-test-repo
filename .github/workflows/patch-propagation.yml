@@ -20,8 +20,8 @@ on:
         options:
           - wi-history
           - affected-file
-      run_live_propagation:
-        description: 'Also propagate on this repo (mutates branches)'
+      push_live_branches:
+        description: 'Push propagated commits back to GitHub (manual runs only)'
         required: false
         default: false
         type: boolean
@@ -64,21 +64,34 @@ jobs:
       - name: Verify propagation outcomes
         run: ./scripts/verify_propagation.sh ./.generated-fixture
 
+      - name: Stage propagation logs for artifact upload
+        if: always()
+        run: |
+          mkdir -p ci-artifacts/integration
+          if [[ -d .generated-fixture/.propagation-logs ]]; then
+            cp -r .generated-fixture/.propagation-logs ci-artifacts/integration/
+          fi
+
       - name: Upload propagation summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: integration-summary-${{ github.run_number }}
-          path: .generated-fixture/.propagation-logs/
+          path: ci-artifacts/integration/
+          if-no-files-found: warn
 
-      - name: Show branch graph
+      - name: Show branch graph after propagation
         working-directory: .generated-fixture
-        run: git log --oneline --graph --all | head -80
+        run: |
+          echo "Definitive fix commits:"
+          git log --all --oneline --grep='Apply definitive thread-safe fix' --grep="${WI_ID}"
+          echo ""
+          git log --oneline --graph --all | head -80
 
   live-repo-test:
     name: Live repo test (propagate on GitHub branches)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && inputs.run_live_propagation
+    needs: full-integration
 
     permissions:
       contents: write
@@ -95,9 +108,11 @@ jobs:
       - name: Show WI footprint on live repo
         run: |
           echo "Work item: [${WI_ID}]"
-          git log --all --oneline --grep="${WI_ID}" | head -20
-          echo ""
+          echo "Branches:"
           git branch -a
+          echo ""
+          echo "WI-tagged commits:"
+          git log --all --oneline --grep="${WI_ID}" | head -20
 
       - name: Propagate on live repository
         run: ./scripts/propagate_patch.sh .
@@ -105,14 +120,31 @@ jobs:
       - name: Verify live propagation
         run: ./scripts/verify_propagation.sh .
 
-      - name: Push propagated branches
+      - name: Stage propagation logs for artifact upload
+        if: always()
         run: |
-          git push origin --all
-          git push origin --tags 2>/dev/null || true
+          mkdir -p ci-artifacts/live
+          if [[ -d .propagation-logs ]]; then
+            cp -r .propagation-logs ci-artifacts/live/
+          fi
 
-      - name: Upload propagation summary
+      - name: Upload live propagation summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: live-propagation-summary-${{ github.run_number }}
-          path: .propagation-logs/
+          path: ci-artifacts/live/
+          if-no-files-found: warn
+
+      - name: Push propagated branches to GitHub
+        if: github.event_name == 'workflow_dispatch' && inputs.push_live_branches == true
+        run: |
+          git push origin --all
+          git push origin --tags 2>/dev/null || true
+
+      - name: Show live branch graph
+        run: |
+          echo "Definitive fix commits on live repo:"
+          git log --all --oneline --grep='Apply definitive thread-safe fix' --grep="${WI_ID}"
+          echo ""
+          git log --oneline --graph --all | head -40

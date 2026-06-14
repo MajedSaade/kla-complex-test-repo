@@ -1,5 +1,8 @@
 # Ephemeral CI/local fixture builds
 .generated-fixture/
 
-# Propagation run logs
+# Propagation run logs (local runs at repo root)
 .propagation-logs/
+
+# CI artifact staging (not gitignored — uploaded by Actions)
+# ci-artifacts/

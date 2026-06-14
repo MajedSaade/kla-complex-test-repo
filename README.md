@@ -41,13 +41,14 @@ Open **Actions → Patch Propagation CI** on this repo.
 | Job | When | What it does |
 |-----|------|--------------|
 | **Full integration** | Every push/PR to `main` | Generates fresh fixture → propagates → verifies |
-| **Live repo test** | Manual only (`Run workflow` + enable live propagation) | Propagates on this repo and pushes branches back |
+| **Live repo test** | Every push/PR (after full integration) | Propagates and verifies on **this repo's branches** in CI |
+| **Push live branches** | Manual only (`Run workflow` + enable push) | Pushes propagated commits back to GitHub |
 
-### Trigger live propagation on GitHub
+### Trigger live push on GitHub
 
 1. **Actions → Patch Propagation CI → Run workflow**
-2. Set **run_live_propagation** to `true`
-3. Run — watch branches update on GitHub
+2. Set **push_live_branches** to `true`
+3. Run — branches update on GitHub
 
 ## Expected propagation results
 
