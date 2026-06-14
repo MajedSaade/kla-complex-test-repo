@@ -48,6 +48,46 @@ cd "${REPO_DIR}"
 
 ORIG_BRANCH="$(git branch --show-current 2>/dev/null || echo main)"
 
+# Fetch all remote branches (CI often only checks out main locally)
+if git remote get-url origin >/dev/null 2>&1; then
+  git fetch origin --prune >> "${LOG_DIR}/fetch.log" 2>&1 || true
+fi
+
+# Resolve a branch name to a local or origin/* ref
+branch_ref() {
+  local branch="$1"
+  if git show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
+    echo "${branch}"
+  elif git show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null; then
+    echo "origin/${branch}"
+  else
+    echo "${branch}"
+  fi
+}
+
+# List all local + remote branches (deduplicated)
+list_branches() {
+  local -A seen=()
+  local b ref
+
+  while IFS= read -r b; do
+    [[ -n "${b}" ]] || continue
+    seen["${b}"]=1
+    echo "${b}"
+  done < <(git branch --format='%(refname:short)' 2>/dev/null)
+
+  while IFS= read -r ref; do
+    b="${ref#origin/}"
+    [[ "${b}" == "HEAD" ]] && continue
+    [[ -n "${seen[$b]:-}" ]] && continue
+    echo "${b}"
+  done < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null)
+}
+
+is_propagation_branch() {
+  [[ "$1" == propagate/* ]]
+}
+
 github_repo_slug() {
   if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
     echo "${GITHUB_REPOSITORY}"
@@ -169,9 +209,11 @@ print(json.load(urllib.request.urlopen(req))['html_url'])
 
 apply_direct() {
   local branch="$1"
-  local log_file="${LOG_DIR}/cherry-pick-${branch//\//_}.log"
+  local ref log_file
+  ref="$(branch_ref "${branch}")"
+  log_file="${LOG_DIR}/cherry-pick-${branch//\//_}.log"
 
-  if git checkout "${branch}" >> "${log_file}" 2>&1 \
+  if git checkout -B "${branch}" "${ref}" >> "${log_file}" 2>&1 \
     && git cherry-pick "${SOURCE_COMMIT}" >> "${log_file}" 2>&1; then
     local new_sha
     new_sha="$(git rev-parse --short HEAD)"
@@ -230,8 +272,10 @@ apply_via_pr() {
 # Locate the definitive fix commit
 # ---------------------------------------------------------------------------
 
+SOURCE_REF="$(branch_ref "${SOURCE_BRANCH}")"
+
 SOURCE_COMMIT="$(
-  git log "${SOURCE_BRANCH}" --format='%H %s' \
+  git log "${SOURCE_REF}" --format='%H %s' \
     | grep -F "${FIX_MESSAGE_PATTERN}" \
     | grep -F "${WI_TAG}" \
     | head -1 \
@@ -239,29 +283,30 @@ SOURCE_COMMIT="$(
 )"
 
 if [[ -z "${SOURCE_COMMIT}" ]]; then
-  echo "Error: could not find definitive fix on '${SOURCE_BRANCH}'" >&2
+  echo "Error: could not find definitive fix on '${SOURCE_BRANCH}' (ref: ${SOURCE_REF})" >&2
   exit 1
 fi
 
 branch_mentions_wi() {
-  local count
-  count="$(git rev-list "$1" --grep="${WI_ID}" --count 2>/dev/null || echo 0)"
+  local ref count
+  ref="$(branch_ref "$1")"
+  count="$(git rev-list "${ref}" --grep="${WI_ID}" --count 2>/dev/null || echo 0)"
   [[ "${count}" -gt 0 ]]
 }
 
 branch_has_file() {
-  git cat-file -e "$1:${AFFECTED_FILE}" 2>/dev/null
+  git cat-file -e "$(branch_ref "$1"):${AFFECTED_FILE}" 2>/dev/null
 }
 
 branch_has_fix() {
-  git show "$1:${AFFECTED_FILE}" 2>/dev/null | grep -Fq "${FIX_MARKER}"
+  git show "$(branch_ref "$1"):${AFFECTED_FILE}" 2>/dev/null | grep -Fq "${FIX_MARKER}"
 }
 
 should_target_branch() {
   local branch="$1"
 
   [[ "${branch}" == "${SOURCE_BRANCH}" ]] && return 1
-  [[ "${branch}" == propagate/* ]] && return 1
+  is_propagation_branch "${branch}" && return 1
   branch_has_fix "${branch}" && return 1
 
   case "${BRANCH_SELECT_MODE}" in
@@ -277,7 +322,7 @@ log "Patch Propagation Report"
 log "========================"
 log "Repository : $(pwd)"
 log "Work item  : ${WI_TAG}"
-log "Source     : ${SOURCE_BRANCH} (${SOURCE_COMMIT:0:7})"
+log "Source     : ${SOURCE_BRANCH} (${SOURCE_REF} → ${SOURCE_COMMIT:0:7})"
 log "Selection  : ${BRANCH_SELECT_MODE}"
 log "Mode       : ${PROPAGATION_MODE}"
 log "Fix commit : $(git log -1 --format='%s' "${SOURCE_COMMIT}")"
@@ -295,14 +340,14 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
 fi
 
 log "Branches whose history mentions ${WI_TAG}:"
-for branch in $(git branch --format='%(refname:short)'); do
-  [[ "${branch}" == propagate/* ]] && continue
+while IFS= read -r branch; do
+  is_propagation_branch "${branch}" && continue
   if branch_mentions_wi "${branch}"; then
-    wi_count="$(git rev-list "${branch}" --grep="${WI_ID}" --count 2>/dev/null || echo 0)"
+    wi_count="$(git rev-list "$(branch_ref "${branch}")" --grep="${WI_ID}" --count 2>/dev/null || echo 0)"
     log "  - ${branch} (${wi_count} WI commit(s) in history)"
     echo "${branch}" >> "${TARGETS_FILE}"
   fi
-done
+done < <(list_branches)
 log ""
 
 applied=0
@@ -310,8 +355,8 @@ prs=0
 skipped=0
 failed=0
 
-for branch in $(git branch --format='%(refname:short)'); do
-  [[ "${branch}" == propagate/* ]] && continue
+while IFS= read -r branch; do
+  is_propagation_branch "${branch}" && continue
 
   if [[ "${branch}" == "${SOURCE_BRANCH}" ]]; then
     log "SKIP  ${branch} — source branch (already contains fix)"
@@ -346,7 +391,7 @@ for branch in $(git branch --format='%(refname:short)'); do
   else
     failed=$((failed + 1))
   fi
-done
+done < <(list_branches)
 
 git checkout "${ORIG_BRANCH}" >> /dev/null 2>&1 || git checkout main >> /dev/null 2>&1 || true
 
