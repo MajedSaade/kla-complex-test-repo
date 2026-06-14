@@ -78,7 +78,7 @@ list_branches() {
 
   while IFS= read -r ref; do
     b="${ref#origin/}"
-    [[ "${b}" == "HEAD" ]] && continue
+    [[ "${b}" == "HEAD" || "${b}" == "origin" || -z "${b}" ]] && continue
     [[ -n "${seen[$b]:-}" ]] && continue
     echo "${b}"
   done < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null)
@@ -369,7 +369,6 @@ while IFS= read -r branch; do
 
   if branch_has_fix "${branch}"; then
     if [[ "${PROPAGATION_MODE}" == "pr" ]] && command -v gh >/dev/null 2>&1 && [[ -n "${GITHUB_REPO:-}" ]]; then
-      local existing_pr
       existing_pr="$(gh pr list --repo "${GITHUB_REPO}" --base "${branch}" --state open \
         --search "Propagate [${WI_ID}] in:title" --json url --jq '.[0].url' 2>/dev/null || true)"
       if [[ -n "${existing_pr}" && "${existing_pr}" != "null" ]]; then
