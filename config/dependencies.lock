@@ -1,0 +1,5 @@
+# Updated: 2026-06-14T23:25:54Z
+django==4.2.7
+celery==5.3.4
+redis==5.0.1
+
