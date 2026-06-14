@@ -53,6 +53,16 @@ Branches with WI history but no affected file (e.g. `release/v1.0`) fail cherry-
 
 ## GitHub Actions
 
+**Important:** Only push fixture branches from `.generated-fixture/`.  
+Do **not** `git push --all --force` from `.generated-fixture` without restoring `main` — it removes the workflow from GitHub.
+
+After a fixture force-push, restore CI on `main`:
+
+```bash
+./scripts/restore_github_main.sh
+git push origin main --force   # puts workflow back; triggers CI automatically
+```
+
 | Job | What it does |
 |-----|--------------|
 | **Full integration** | Generates fresh fixture, direct cherry-pick, verify |

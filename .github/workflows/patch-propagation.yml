@@ -54,7 +54,10 @@ jobs:
         run: |
           mkdir -p ci-artifacts/integration
           if [[ -d .generated-fixture/.propagation-logs ]]; then
-            cp -r .generated-fixture/.propagation-logs ci-artifacts/integration/
+            cp -r .generated-fixture/.propagation-logs/. ci-artifacts/integration/ 2>/dev/null || true
+          fi
+          if [[ ! -f ci-artifacts/integration/propagation-summary.txt ]]; then
+            echo "No integration logs generated" > ci-artifacts/integration/propagation-summary.txt
           fi
 
       - name: Upload propagation summary
@@ -98,7 +101,10 @@ jobs:
         run: |
           mkdir -p ci-artifacts/live-prs
           if [[ -d .propagation-logs ]]; then
-            cp -r .propagation-logs ci-artifacts/live-prs/
+            cp -r .propagation-logs/. ci-artifacts/live-prs/ 2>/dev/null || true
+          fi
+          if [[ ! -f ci-artifacts/live-prs/propagation-summary.txt ]]; then
+            echo "No live PR logs generated" > ci-artifacts/live-prs/propagation-summary.txt
           fi
 
       - name: Upload PR propagation summary
