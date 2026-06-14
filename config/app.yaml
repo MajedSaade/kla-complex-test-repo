@@ -1,0 +1,6 @@
+# Updated: 2026-06-14T22:24:27Z
+app:
+  name: enterprise-platform
+  version: 0.1.0
+  environment: development
+
