@@ -65,6 +65,17 @@ branch_ref() {
   fi
 }
 
+# In PR mode, prefer origin/* so stale local branches do not hide missing fixes.
+branch_check_ref() {
+  local branch="$1"
+  if [[ "${PROPAGATION_MODE:-direct}" == "pr" ]] \
+    && git show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null; then
+    echo "origin/${branch}"
+  else
+    branch_ref "${branch}"
+  fi
+}
+
 # List all local + remote branches (deduplicated)
 list_branches() {
   local -A seen=()
@@ -143,6 +154,9 @@ open_pull_request() {
   local title="$3"
   local body="$4"
   local repo="${5:-}"
+  local owner="${repo%%/*}"
+  local head_ref="${head_branch}"
+  local url body_file existing
 
   if [[ "${DRY_RUN}" == "true" ]]; then
     log "DRY   ${base_branch} — would open PR ${head_branch} → ${base_branch}"
@@ -150,18 +164,25 @@ open_pull_request() {
   fi
 
   if command -v gh >/dev/null 2>&1; then
-    local existing
-    existing="$(gh pr list --repo "${repo}" --base "${base_branch}" --head "${head_branch}" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+    existing="$(gh pr list --repo "${repo}" --base "${base_branch}" \
+      --head "${owner}:${head_branch}" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+    if [[ -z "${existing}" || "${existing}" == "null" ]]; then
+      existing="$(gh pr list --repo "${repo}" --base "${base_branch}" \
+        --head "${head_branch}" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+    fi
     if [[ -n "${existing}" && "${existing}" != "null" ]]; then
       log "PR    ${base_branch} — existing open PR ${existing}"
       echo "${base_branch}|${existing}" >> "${PRS_FILE}"
       return 0
     fi
-    local url body_file
     body_file="$(mktemp)"
     printf '%s' "${body}" > "${body_file}"
-    url="$(gh pr create --repo "${repo}" --base "${base_branch}" --head "${head_branch}" \
-      --title "${title}" --body-file "${body_file}")"
+    if ! url="$(gh pr create --repo "${repo}" --base "${base_branch}" --head "${head_ref}" \
+      --title "${title}" --body-file "${body_file}" 2>&1)"; then
+      rm -f "${body_file}"
+      echo "gh pr create failed: ${url}" >&2
+      return 1
+    fi
     rm -f "${body_file}"
     log "PR    ${base_branch} — opened ${url}"
     echo "${base_branch}|${url}" >> "${PRS_FILE}"
@@ -169,41 +190,17 @@ open_pull_request() {
   fi
 
   if [[ -n "${GITHUB_TOKEN:-}" && -n "${repo}" ]]; then
-    local existing_url
-    existing_url="$(curl -sf \
+    existing="$(curl -sf \
       -H "Authorization: Bearer ${GITHUB_TOKEN}" \
       -H "Accept: application/vnd.github+json" \
-      "https://api.github.com/repos/${repo}/pulls?state=open&head=${repo%%/*}:${head_branch}&base=${base_branch}" \
+      "https://api.github.com/repos/${repo}/pulls?state=open&head=${owner}:${head_branch}&base=${base_branch}" \
       | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['html_url'] if d else '')" 2>/dev/null || true)"
-    if [[ -n "${existing_url}" ]]; then
-      log "PR    ${base_branch} — existing open PR ${existing_url}"
-      echo "${base_branch}|${existing_url}" >> "${PRS_FILE}"
+    if [[ -n "${existing}" ]]; then
+      log "PR    ${base_branch} — existing open PR ${existing}"
+      echo "${base_branch}|${existing}" >> "${PRS_FILE}"
       return 0
     fi
-    local url
-    url="$(python3 -c "
-import json, urllib.request, os
-payload = json.dumps({
-    'title': '''${title//\'/\\\'}\''',
-    'head': '${head_branch}',
-    'base': '${base_branch}',
-    'body': '''${body//\'/\\\'}\'''
-}).encode()
-req = urllib.request.Request(
-    'https://api.github.com/repos/${repo}/pulls',
-    data=payload,
-    headers={
-        'Authorization': f'Bearer {os.environ[\"GITHUB_TOKEN\"]}',
-        'Accept': 'application/vnd.github+json',
-        'Content-Type': 'application/json',
-    },
-    method='POST',
-)
-print(json.load(urllib.request.urlopen(req))['html_url'])
-")"
-    log "PR    ${base_branch} — opened ${url}"
-    echo "${base_branch}|${url}" >> "${PRS_FILE}"
-    return 0
+    return 1
   fi
 
   echo "Error: PR mode requires 'gh' CLI or GITHUB_TOKEN with repo access." >&2
@@ -238,18 +235,28 @@ apply_via_pr() {
   local repo="$2"
   local prop_branch
   local log_file
+  local worktree_dir
+  local base_ref
   prop_branch="$(propagation_branch_name "${branch}")"
   log_file="${LOG_DIR}/pr-${branch//\//_}.log"
+  worktree_dir="${LOG_DIR}/worktrees/${branch//\//_}"
+  base_ref="$(branch_check_ref "${branch}")"
+
+  mkdir -p "${LOG_DIR}/worktrees"
+  rm -rf "${worktree_dir}"
+  git worktree prune >> "${log_file}" 2>&1 || true
 
   git fetch origin "${branch}" >> "${log_file}" 2>&1 || git fetch origin >> "${log_file}" 2>&1 || true
 
-  if ! git checkout -B "${prop_branch}" "origin/${branch}" >> "${log_file}" 2>&1; then
-    git checkout -B "${prop_branch}" "${branch}" >> "${log_file}" 2>&1
+  if ! git worktree add -B "${prop_branch}" "${worktree_dir}" "${base_ref}" >> "${log_file}" 2>&1; then
+    log "FAIL  ${branch} — unable to create worktree from ${base_ref} (see ${log_file})"
+    rm -rf "${worktree_dir}"
+    return 1
   fi
 
-  if ! git cherry-pick "${SOURCE_COMMIT}" >> "${log_file}" 2>&1; then
-    git cherry-pick --abort >> "${log_file}" 2>&1 || true
-    git checkout "${ORIG_BRANCH}" >> "${log_file}" 2>&1 || true
+  if ! git -C "${worktree_dir}" cherry-pick "${SOURCE_COMMIT}" >> "${log_file}" 2>&1; then
+    git -C "${worktree_dir}" cherry-pick --abort >> "${log_file}" 2>&1 || true
+    git worktree remove "${worktree_dir}" --force >> "${log_file}" 2>&1 || rm -rf "${worktree_dir}"
     if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] && ! branch_has_file "${branch}"; then
       log "FAIL  ${branch} — WI history match but missing '${AFFECTED_FILE}' (see ${log_file})"
     else
@@ -260,14 +267,25 @@ apply_via_pr() {
 
   if [[ "${DRY_RUN}" == "true" ]]; then
     log "DRY   ${branch} — would push ${prop_branch} and open PR"
-    git checkout "${ORIG_BRANCH}" >> "${log_file}" 2>&1 || true
+    git worktree remove "${worktree_dir}" --force >> "${log_file}" 2>&1 || rm -rf "${worktree_dir}"
     return 0
   fi
 
-  git push -u origin "${prop_branch}" >> "${log_file}" 2>&1
+  if ! git -C "${worktree_dir}" push -u origin "${prop_branch}" >> "${log_file}" 2>&1; then
+    if ! git -C "${worktree_dir}" push -f origin "${prop_branch}" >> "${log_file}" 2>&1; then
+      log "FAIL  ${branch} — unable to push ${prop_branch} (see ${log_file})"
+      git worktree remove "${worktree_dir}" --force >> "${log_file}" 2>&1 || rm -rf "${worktree_dir}"
+      return 1
+    fi
+  fi
 
-  open_pull_request "${branch}" "${prop_branch}" "$(pr_title "${branch}")" "$(pr_body "${branch}")" "${repo}"
-  git checkout "${ORIG_BRANCH}" >> "${log_file}" 2>&1 || git checkout main >> "${log_file}" 2>&1 || true
+  if ! open_pull_request "${branch}" "${prop_branch}" "$(pr_title "${branch}")" "$(pr_body "${branch}")" "${repo}" >> "${log_file}" 2>&1; then
+    log "FAIL  ${branch} — unable to open pull request (see ${log_file})"
+    git worktree remove "${worktree_dir}" --force >> "${log_file}" 2>&1 || rm -rf "${worktree_dir}"
+    return 1
+  fi
+
+  git worktree remove "${worktree_dir}" --force >> "${log_file}" 2>&1 || rm -rf "${worktree_dir}"
   return 0
 }
 
@@ -298,11 +316,11 @@ branch_mentions_wi() {
 }
 
 branch_has_file() {
-  git cat-file -e "$(branch_ref "$1"):${AFFECTED_FILE}" 2>/dev/null
+  git cat-file -e "$(branch_check_ref "$1"):${AFFECTED_FILE}" 2>/dev/null
 }
 
 branch_has_fix() {
-  git show "$(branch_ref "$1"):${AFFECTED_FILE}" 2>/dev/null | grep -Fq "${FIX_MARKER}"
+  git show "$(branch_check_ref "$1"):${AFFECTED_FILE}" 2>/dev/null | grep -Fq "${FIX_MARKER}"
 }
 
 should_target_branch() {
@@ -317,6 +335,13 @@ should_target_branch() {
     affected-file) branch_has_file "${branch}" ;;
     *) echo "Error: unknown BRANCH_SELECT_MODE '${BRANCH_SELECT_MODE}'" >&2; exit 1 ;;
   esac
+}
+
+is_expected_wi_failure() {
+  local branch="$1"
+  [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] \
+    && branch_mentions_wi "${branch}" \
+    && ! branch_has_file "${branch}"
 }
 
 GITHUB_REPO="$(github_repo_slug || true)"
@@ -357,6 +382,8 @@ applied=0
 prs=0
 skipped=0
 failed=0
+expected_failed=0
+unexpected_failed=0
 
 while IFS= read -r branch; do
   is_propagation_branch "${branch}" && continue
@@ -394,16 +421,33 @@ while IFS= read -r branch; do
     continue
   fi
 
+  if [[ "${PROPAGATION_MODE}" == "pr" ]] && is_expected_wi_failure "${branch}"; then
+    log "FAIL  ${branch} — WI history match but missing '${AFFECTED_FILE}'"
+    failed=$((failed + 1))
+    expected_failed=$((expected_failed + 1))
+    continue
+  fi
+
   if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
     if apply_via_pr "${branch}" "${GITHUB_REPO}"; then
       prs=$((prs + 1))
     else
       failed=$((failed + 1))
+      if is_expected_wi_failure "${branch}"; then
+        expected_failed=$((expected_failed + 1))
+      else
+        unexpected_failed=$((unexpected_failed + 1))
+      fi
     fi
   elif apply_direct "${branch}"; then
     applied=$((applied + 1))
   else
     failed=$((failed + 1))
+    if is_expected_wi_failure "${branch}"; then
+      expected_failed=$((expected_failed + 1))
+    else
+      unexpected_failed=$((unexpected_failed + 1))
+    fi
   fi
 done < <(list_branches)
 
@@ -418,11 +462,28 @@ else
 fi
 log "Full log: ${SUMMARY_FILE}"
 
-if [[ "${failed}" -gt 0 && "${BRANCH_SELECT_MODE}" == "wi-history" ]]; then
-  log ""
-  log "Note: FAIL on WI branches without '${AFFECTED_FILE}' is expected for this fixture."
+if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
+  if [[ "${prs}" -lt 3 ]]; then
+    log "Error: PR mode requires at least 3 pull requests, opened ${prs}"
+    exit 1
+  fi
+  if [[ "${unexpected_failed}" -gt 0 ]]; then
+    log "Error: ${unexpected_failed} unexpected failure(s)"
+    exit 1
+  fi
+  if [[ "${expected_failed}" -gt 0 ]]; then
+    log "Note: ${expected_failed} expected failure(s) on WI branches without '${AFFECTED_FILE}'"
+  fi
   exit 0
 fi
 
-[[ "${failed}" -gt 0 ]] && exit 1
+if [[ "${unexpected_failed}" -gt 0 ]]; then
+  exit 1
+fi
+
+if [[ "${expected_failed}" -gt 0 ]]; then
+  log ""
+  log "Note: ${expected_failed} expected failure(s) on WI branches without '${AFFECTED_FILE}'"
+fi
+
 exit 0

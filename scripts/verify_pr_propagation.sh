@@ -45,10 +45,10 @@ check_fail() { echo -e "${RED}FAIL${NC}  $*" >&2; fail=$((fail + 1)); }
 
 branch_ref() {
   local branch="$1"
-  if git -C "${REPO_DIR}" show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
-    echo "${branch}"
-  elif git -C "${REPO_DIR}" show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null; then
+  if git -C "${REPO_DIR}" show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null; then
     echo "origin/${branch}"
+  elif git -C "${REPO_DIR}" show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
+    echo "${branch}"
   else
     echo "${branch}"
   fi
