@@ -89,15 +89,18 @@ is_propagation_branch() {
 }
 
 github_repo_slug() {
+  local slug=""
   if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
-    echo "${GITHUB_REPOSITORY}"
-    return 0
+    slug="${GITHUB_REPOSITORY}"
+  else
+    local url
+    url="$(git remote get-url origin 2>/dev/null || true)"
+    if [[ "${url}" =~ github\.com[:/]([^/]+/[^/]+?)(\.git)?/?$ ]]; then
+      slug="${BASH_REMATCH[1]}"
+    fi
   fi
-  local url
-  url="$(git remote get-url origin 2>/dev/null || true)"
-  if [[ "${url}" =~ github\.com[:/](.+/.+)(\.git)?$ ]]; then
-    echo "${BASH_REMATCH[1]}"
-  fi
+  slug="${slug%.git}"
+  echo "${slug}"
 }
 
 branch_to_prop_slug() {
@@ -365,7 +368,19 @@ while IFS= read -r branch; do
   fi
 
   if branch_has_fix "${branch}"; then
-    log "SKIP  ${branch} — fix marker already present"
+    if [[ "${PROPAGATION_MODE}" == "pr" ]] && command -v gh >/dev/null 2>&1 && [[ -n "${GITHUB_REPO:-}" ]]; then
+      local existing_pr
+      existing_pr="$(gh pr list --repo "${GITHUB_REPO}" --base "${branch}" --state open \
+        --search "Propagate [${WI_ID}] in:title" --json url --jq '.[0].url' 2>/dev/null || true)"
+      if [[ -n "${existing_pr}" && "${existing_pr}" != "null" ]]; then
+        log "SKIP  ${branch} — fix on branch; existing PR ${existing_pr}"
+        echo "${branch}|${existing_pr}" >> "${PRS_FILE}"
+      else
+        log "SKIP  ${branch} — fix marker already present on branch"
+      fi
+    else
+      log "SKIP  ${branch} — fix marker already present"
+    fi
     skipped=$((skipped + 1))
     continue
   fi
