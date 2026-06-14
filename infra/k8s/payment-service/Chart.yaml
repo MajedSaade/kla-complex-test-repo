@@ -1,0 +1,6 @@
+# Updated: 2026-06-14T23:25:58Z
+apiVersion: v2
+name: payment-service
+version: 0.1.0
+appVersion: "1.0.0"
+
