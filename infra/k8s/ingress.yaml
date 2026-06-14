@@ -1,0 +1,8 @@
+# Updated: 2026-06-14T23:25:58Z
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: platform-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
