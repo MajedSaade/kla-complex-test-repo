@@ -1,0 +1,5 @@
+# Ephemeral CI/local fixture builds
+.generated-fixture/
+
+# Propagation run logs
+.propagation-logs/

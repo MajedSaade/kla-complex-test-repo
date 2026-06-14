@@ -1,0 +1,118 @@
+name: Patch Propagation CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      work_item:
+        description: 'Work item ID (without brackets)'
+        required: false
+        default: 'WI-440219'
+        type: string
+      branch_select_mode:
+        description: 'Branch selection strategy'
+        required: false
+        default: 'wi-history'
+        type: choice
+        options:
+          - wi-history
+          - affected-file
+      run_live_propagation:
+        description: 'Also propagate on this repo (mutates branches)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  WI_ID: ${{ github.event.inputs.work_item || 'WI-440219' }}
+  BRANCH_SELECT_MODE: ${{ github.event.inputs.branch_select_mode || 'wi-history' }}
+
+jobs:
+  full-integration:
+    name: Full integration (generate → propagate → verify)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x generate_complex_repo.sh scripts/*.sh
+
+      - name: Generate fresh fixture from scratch
+        run: ./generate_complex_repo.sh ./.generated-fixture
+
+      - name: Show WI footprint (before propagation)
+        working-directory: .generated-fixture
+        run: |
+          echo "Work item: [${WI_ID}]"
+          git log --all --oneline --grep="${WI_ID}"
+          echo ""
+          for branch in $(git branch --format='%(refname:short)'); do
+            count=$(git rev-list "${branch}" --grep="${WI_ID}" --count 2>/dev/null || echo 0)
+            if [[ "${count}" != "0" ]]; then
+              echo "  ${branch} (${count} WI commit(s))"
+            fi
+          done
+
+      - name: Propagate definitive fix
+        run: ./scripts/propagate_patch.sh ./.generated-fixture
+
+      - name: Verify propagation outcomes
+        run: ./scripts/verify_propagation.sh ./.generated-fixture
+
+      - name: Upload propagation summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-summary-${{ github.run_number }}
+          path: .generated-fixture/.propagation-logs/
+
+      - name: Show branch graph
+        working-directory: .generated-fixture
+        run: git log --oneline --graph --all | head -80
+
+  live-repo-test:
+    name: Live repo test (propagate on GitHub branches)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_propagation
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout all branches
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      - name: Show WI footprint on live repo
+        run: |
+          echo "Work item: [${WI_ID}]"
+          git log --all --oneline --grep="${WI_ID}" | head -20
+          echo ""
+          git branch -a
+
+      - name: Propagate on live repository
+        run: ./scripts/propagate_patch.sh .
+
+      - name: Verify live propagation
+        run: ./scripts/verify_propagation.sh .
+
+      - name: Push propagated branches
+        run: |
+          git push origin --all
+          git push origin --tags 2>/dev/null || true
+
+      - name: Upload propagation summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-propagation-summary-${{ github.run_number }}
+          path: .propagation-logs/
