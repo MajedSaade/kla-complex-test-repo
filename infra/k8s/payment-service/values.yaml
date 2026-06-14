@@ -1,0 +1,7 @@
+# Updated: 2026-06-14T23:25:58Z
+replicaCount: 3
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
