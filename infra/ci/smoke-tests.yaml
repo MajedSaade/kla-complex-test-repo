@@ -1,0 +1,6 @@
+# Updated: 2026-06-14T23:25:54Z
+smoke_tests:
+  target: production-staging
+  suites: [health, auth, payment-smoke]
+  work_item: WI-440219
+
