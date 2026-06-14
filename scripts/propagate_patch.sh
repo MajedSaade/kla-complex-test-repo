@@ -19,6 +19,14 @@
 set -euo pipefail
 
 REPO_DIR="${1:-.}"
+
+if [[ ! -d "${REPO_DIR}/.git" ]]; then
+  echo "Error: ${REPO_DIR} is not a Git repository." >&2
+  exit 1
+fi
+
+REPO_DIR="$(cd "${REPO_DIR}" && pwd)"
+
 WI_ID="${WI_ID:-WI-440219}"
 WI_TAG="[${WI_ID}]"
 SOURCE_BRANCH="${SOURCE_BRANCH:-bugfix/payment-patch}"
@@ -37,11 +45,6 @@ TARGETS_FILE="${LOG_DIR}/wi-target-branches.txt"
 log() {
   echo "$*" | tee -a "${SUMMARY_FILE}"
 }
-
-if [[ ! -d "${REPO_DIR}/.git" ]]; then
-  echo "Error: ${REPO_DIR} is not a Git repository." >&2
-  exit 1
-fi
 
 cd "${REPO_DIR}"
 
