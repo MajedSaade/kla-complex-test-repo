@@ -65,6 +65,8 @@ PROPAGATION_MODE=pr ./scripts/verify_propagation.sh .
 
 A branch is **skipped / gets no PR** when any of these hold:
 
+- it is a **protected integration branch** (`PROTECTED_BRANCHES`, default
+  `main master`) — these never receive the fix, even if they qualify, or
 - its history has no `WI-440219` mention (not a target), or
 - it has the affected file but a **competing change** makes the cherry-pick
   conflict (e.g. `feature/payment-hotfix`) — reported, not applied, or

@@ -34,6 +34,10 @@ DRY_RUN="${DRY_RUN:-false}"
 # Branches to skip even when they qualify (space- or comma-separated).
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-infra/kubernetes-config}"
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
+# Integration branches that must NEVER receive a propagation PR/cherry-pick,
+# regardless of WI history (space- or comma-separated).
+PROTECTED_BRANCHES="${PROTECTED_BRANCHES:-main master}"
+PROTECTED_BRANCHES="${PROTECTED_BRANCHES//,/ }"
 # Minimum PRs required for PR mode to succeed (WI branches that can receive the
 # fix: cleanly cherry-picked or file-added, minus blocked/conflicting ones).
 MIN_PRS="${MIN_PRS:-5}"
@@ -118,6 +122,14 @@ is_propagation_branch() {
 is_blocked() {
   local b
   for b in ${BLOCKED_BRANCHES}; do
+    [[ "$1" == "${b}" ]] && return 0
+  done
+  return 1
+}
+
+is_protected() {
+  local b
+  for b in ${PROTECTED_BRANCHES}; do
     [[ "$1" == "${b}" ]] && return 0
   done
   return 1
@@ -390,6 +402,7 @@ should_target_branch() {
 
   [[ "${branch}" == "${SOURCE_BRANCH}" ]] && return 1
   is_propagation_branch "${branch}" && return 1
+  is_protected "${branch}" && return 1
   is_blocked "${branch}" && return 1
   branch_has_fix "${branch}" && return 1
 
@@ -462,6 +475,13 @@ classify_failure() {
 
 while IFS= read -r branch; do
   is_propagation_branch "${branch}" && continue
+
+  if is_protected "${branch}"; then
+    log "SKIP  ${branch} — protected integration branch (never receives the fix)"
+    record SKIPPED "${branch}" "protected integration branch (never receives the fix)"
+    skipped=$((skipped + 1))
+    continue
+  fi
 
   if [[ "${branch}" == "${SOURCE_BRANCH}" ]]; then
     log "SKIP  ${branch} — source branch (already contains fix)"

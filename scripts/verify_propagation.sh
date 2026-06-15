@@ -35,6 +35,9 @@ RESULTS_FILE="${RESULTS_FILE:-${REPO_DIR}/.propagation-logs/results.tsv}"
 # Same block policy as propagate_patch.sh (space- or comma-separated).
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-infra/kubernetes-config}"
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
+# Protected integration branches that must never receive a PR (matches propagate).
+PROTECTED_BRANCHES="${PROTECTED_BRANCHES:-main master}"
+PROTECTED_BRANCHES="${PROTECTED_BRANCHES//,/ }"
 
 # Direct-mode (fixture self-test) expectations. These describe the KNOWN shape
 # of the synthetic fixture produced by generate_complex_repo.sh — never real
@@ -115,6 +118,14 @@ is_blocked() {
   return 1
 }
 
+is_protected() {
+  local b
+  for b in ${PROTECTED_BRANCHES}; do
+    [[ "$1" == "${b}" ]] && return 0
+  done
+  return 1
+}
+
 # Discover every real branch (local heads + origin/*), deduplicated. This is
 # what makes PR-mode verification reflect the actual GitHub repo with no
 # hardcoded branch names.
@@ -179,6 +190,7 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
     local b="$1"
     [[ "${b}" == "${SOURCE_BRANCH}" ]] && { echo source; return; }
     is_propagation_branch "${b}" && { echo propagation; return; }
+    is_protected "${b}" && { echo protected; return; }
     is_blocked "${b}" && { echo blocked; return; }
     case "${BRANCH_SELECT_MODE}" in
       wi-history)
@@ -218,6 +230,7 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
     case "$(classify_branch "${branch}")" in
       eligible|propagation) continue ;;
       source)        reason="source branch" ;;
+      protected)     reason="protected integration branch" ;;
       blocked)       reason="blocked by policy" ;;
       skip-no-wi)    reason="no ${WI_ID} in history" ;;
       skip-no-file)  reason="affected file not present" ;;
