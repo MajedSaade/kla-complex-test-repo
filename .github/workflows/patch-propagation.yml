@@ -24,9 +24,10 @@ on:
 env:
   WI_ID: ${{ github.event.inputs.work_item || 'WI-440219' }}
   BRANCH_SELECT_MODE: ${{ github.event.inputs.branch_select_mode || 'wi-history' }}
-  GH_TOKEN: ${{ github.token }}
 
 jobs:
+  # Self-contained: builds a fresh fixture, propagates, and verifies in one
+  # checkout. Needs no secrets and is the gate that must always pass.
   full-integration:
     name: Full integration (generate → propagate → verify)
     runs-on: ubuntu-latest
@@ -58,9 +59,8 @@ jobs:
           if [[ -d .generated-fixture/.propagation-logs ]]; then
             cp -r .generated-fixture/.propagation-logs/. ci-artifacts/integration/ 2>/dev/null || true
           fi
-          if [[ ! -f ci-artifacts/integration/propagation-summary.txt ]]; then
-            echo "No integration logs generated" > ci-artifacts/integration/propagation-summary.txt
-          fi
+          [[ -f ci-artifacts/integration/propagation-summary.txt ]] \
+            || echo "No integration logs generated" > ci-artifacts/integration/propagation-summary.txt
 
       - name: Upload propagation summary
         if: always()
@@ -70,6 +70,9 @@ jobs:
           path: ci-artifacts/integration/
           if-no-files-found: warn
 
+  # Opens real PRs on this repo. The default GITHUB_TOKEN cannot create pull
+  # requests, so this job needs a PAT stored as the PROPAGATION_TOKEN secret.
+  # Without it the job is skipped (with a notice) instead of failing the build.
   live-repo-prs:
     name: Live repo (open PRs for WI branches)
     runs-on: ubuntu-latest
@@ -80,47 +83,65 @@ jobs:
       pull-requests: write
 
     steps:
+      - name: Check for propagation token
+        id: token
+        env:
+          PROPAGATION_TOKEN: ${{ secrets.PROPAGATION_TOKEN }}
+        run: |
+          if [[ -n "${PROPAGATION_TOKEN}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Live PRs skipped::Set a PAT secret named PROPAGATION_TOKEN (with repo + pull-request scope) to enable automatic PR creation. The default GITHUB_TOKEN is not permitted to open pull requests."
+          fi
+
       - name: Checkout all branches
+        if: steps.token.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ github.token }}
+          token: ${{ secrets.PROPAGATION_TOKEN }}
 
       - name: Configure git and GitHub CLI
+        if: steps.token.outputs.enabled == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PROPAGATION_TOKEN }}
         run: |
           gh auth setup-git
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Make scripts executable
+        if: steps.token.outputs.enabled == 'true'
         run: chmod +x scripts/*.sh
 
       - name: Open pull requests for matching branches
+        if: steps.token.outputs.enabled == 'true'
         env:
           PROPAGATION_MODE: pr
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PROPAGATION_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PROPAGATION_TOKEN }}
         run: ./scripts/propagate_patch.sh .
 
       - name: Verify pull requests were opened
-        run: ./scripts/verify_pr_propagation.sh .
+        if: steps.token.outputs.enabled == 'true'
+        env:
+          PROPAGATION_MODE: pr
+        run: ./scripts/verify_propagation.sh .
 
       - name: Stage PR propagation logs
-        if: always()
+        if: always() && steps.token.outputs.enabled == 'true'
         run: |
           mkdir -p ci-artifacts/live-prs
           if [[ -d .propagation-logs ]]; then
             cp -r .propagation-logs/. ci-artifacts/live-prs/ 2>/dev/null || true
           fi
-          if [[ ! -f ci-artifacts/live-prs/propagation-summary.txt ]]; then
-            echo "No live PR logs generated" > ci-artifacts/live-prs/propagation-summary.txt
-          fi
+          [[ -f ci-artifacts/live-prs/propagation-summary.txt ]] \
+            || echo "No live PR logs generated" > ci-artifacts/live-prs/propagation-summary.txt
 
       - name: Upload PR propagation summary
-        if: always()
+        if: always() && steps.token.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: live-pr-summary-${{ github.run_number }}
@@ -128,6 +149,9 @@ jobs:
           if-no-files-found: warn
 
       - name: List open propagation PRs
+        if: steps.token.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PROPAGATION_TOKEN }}
         run: |
           echo "Open propagation PRs:"
           gh pr list --search "Propagate [${WI_ID}] in:title" --state open \
