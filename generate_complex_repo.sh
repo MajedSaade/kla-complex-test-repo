@@ -399,6 +399,27 @@ commit_change \
   "            return txn['id'] in self._processed_ids"
 
 # ---------------------------------------------------------------------------
+# feature/payment-hotfix (from feature/payment-gateway)
+# Has WI history + the affected file, but adds a COMPETING change to the same
+# tail of transaction_queue.py — so cherry-picking the definitive fix produces
+# a real merge conflict (not a missing-file failure). Propagation must report
+# this and keep going, never crash.
+# ---------------------------------------------------------------------------
+
+section "Branch: feature/payment-hotfix (from feature/payment-gateway)"
+
+new_branch "feature/payment-hotfix" "feature/payment-gateway"
+
+commit_change \
+  "Apply competing in-branch lock workaround for payment race ${WI}" \
+  "src/payment/transaction_queue.py" \
+  "" \
+  "    # Local workaround — intentionally diverges from the definitive fix" \
+  "    def enqueue(self, txn: dict) -> None:" \
+  "        with self._lock:  # competing approach, conflicts with the RLock fix" \
+  "            self._queue.put(txn)"
+
+# ---------------------------------------------------------------------------
 # feature/ui-ux (from main)
 # ---------------------------------------------------------------------------
 

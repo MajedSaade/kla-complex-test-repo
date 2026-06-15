@@ -408,6 +408,28 @@ skipped=0
 failed=0
 expected_failed=0
 unexpected_failed=0
+conflicts=0
+
+# Classify a failed cherry-pick and record it. A branch that HAS the affected
+# file but fails is a genuine merge CONFLICT (non-fatal — needs manual
+# resolution). A WI branch missing the file is an expected failure. Anything
+# else is an unexpected failure (fatal).
+classify_failure() {
+  local branch="$1"
+  if is_expected_wi_failure "${branch}"; then
+    failed=$((failed + 1))
+    expected_failed=$((expected_failed + 1))
+    record FAILED "${branch}" "WI history match but missing '${AFFECTED_FILE}' (cannot apply fix)"
+  elif branch_has_file "${branch}"; then
+    conflicts=$((conflicts + 1))
+    log "CONFLICT ${branch} — fix does not apply cleanly; manual resolution needed"
+    record CONFLICT "${branch}" "cherry-pick conflict; manual resolution needed"
+  else
+    failed=$((failed + 1))
+    unexpected_failed=$((unexpected_failed + 1))
+    record FAILED "${branch}" "unexpected failure (cherry-pick/push/PR)"
+  fi
+}
 
 while IFS= read -r branch; do
   is_propagation_branch "${branch}" && continue
@@ -471,27 +493,13 @@ while IFS= read -r branch; do
       pr_url="$(grep -F "${branch}|" "${PRS_FILE}" 2>/dev/null | tail -1 | cut -d'|' -f2-)"
       record PR_OPENED "${branch}" "pull request opened" "${pr_url}"
     else
-      failed=$((failed + 1))
-      if is_expected_wi_failure "${branch}"; then
-        expected_failed=$((expected_failed + 1))
-        record FAILED "${branch}" "WI history match but missing '${AFFECTED_FILE}' (cannot apply fix)"
-      else
-        unexpected_failed=$((unexpected_failed + 1))
-        record FAILED "${branch}" "cherry-pick conflict, push, or PR creation failed"
-      fi
+      classify_failure "${branch}"
     fi
   elif apply_direct "${branch}"; then
     applied=$((applied + 1))
     record APPLIED "${branch}" "fix cherry-picked onto branch"
   else
-    failed=$((failed + 1))
-    if is_expected_wi_failure "${branch}"; then
-      expected_failed=$((expected_failed + 1))
-      record FAILED "${branch}" "WI history match but missing '${AFFECTED_FILE}' (cannot apply fix)"
-    else
-      unexpected_failed=$((unexpected_failed + 1))
-      record FAILED "${branch}" "cherry-pick conflict"
-    fi
+    classify_failure "${branch}"
   fi
 done < <(list_branches)
 
@@ -499,36 +507,31 @@ git checkout "${ORIG_BRANCH}" >> /dev/null 2>&1 || git checkout main >> /dev/nul
 
 log ""
 if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
-  log "Summary: ${prs} PR(s) opened, ${skipped} skipped, ${failed} failed"
+  log "Summary: ${prs} PR(s) opened, ${skipped} skipped, ${conflicts} conflict(s), ${failed} failed"
   log "PR list: ${PRS_FILE}"
 else
-  log "Summary: ${applied} applied, ${skipped} skipped, ${failed} failed"
+  log "Summary: ${applied} applied, ${skipped} skipped, ${conflicts} conflict(s), ${failed} failed"
 fi
 log "Full log: ${SUMMARY_FILE}"
 log "Results  : ${RESULTS_FILE}"
 
-if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
-  if [[ "${prs}" -lt "${MIN_PRS}" ]]; then
-    log "Error: PR mode requires at least ${MIN_PRS} pull requests, opened ${prs}"
-    exit 1
-  fi
-  if [[ "${unexpected_failed}" -gt 0 ]]; then
-    log "Error: ${unexpected_failed} unexpected failure(s)"
-    exit 1
-  fi
-  if [[ "${expected_failed}" -gt 0 ]]; then
-    log "Note: ${expected_failed} expected failure(s) on WI branches without '${AFFECTED_FILE}'"
-  fi
-  exit 0
+# Conflicts and missing-file failures are expected, non-fatal outcomes: they are
+# reported (and emailed) but never stop the run. Only truly unexpected failures
+# (or too few PRs in PR mode) fail the job.
+if [[ "${conflicts}" -gt 0 ]]; then
+  log "Note: ${conflicts} branch(es) need manual conflict resolution (no auto-propagation)."
+fi
+if [[ "${expected_failed}" -gt 0 ]]; then
+  log "Note: ${expected_failed} WI branch(es) without '${AFFECTED_FILE}' (fix not applicable)."
 fi
 
-if [[ "${unexpected_failed}" -gt 0 ]]; then
+if [[ "${PROPAGATION_MODE}" == "pr" && "${prs}" -lt "${MIN_PRS}" ]]; then
+  log "Error: PR mode requires at least ${MIN_PRS} pull requests, opened ${prs}"
   exit 1
 fi
-
-if [[ "${expected_failed}" -gt 0 ]]; then
-  log ""
-  log "Note: ${expected_failed} expected failure(s) on WI branches without '${AFFECTED_FILE}'"
+if [[ "${unexpected_failed}" -gt 0 ]]; then
+  log "Error: ${unexpected_failed} unexpected failure(s)"
+  exit 1
 fi
 
 exit 0

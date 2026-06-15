@@ -49,6 +49,7 @@ fi
 
 opened=()
 skipped=()
+conflicts=()
 noaction=()
 
 while IFS=$'\t' read -r status branch reason url; do
@@ -58,12 +59,13 @@ while IFS=$'\t' read -r status branch reason url; do
     PR_EXISTING) opened+=("${branch} → ${url:-(existing PR)} (already open)") ;;
     APPLIED)     opened+=("${branch} (fix cherry-picked directly)") ;;
     SKIPPED)     skipped+=("${branch} — ${reason:-skipped}") ;;
+    CONFLICT)    conflicts+=("${branch} — ${reason:-cherry-pick conflict; manual resolution needed}") ;;
     FAILED)      noaction+=("${branch} — ${reason:-could not apply}") ;;
     *)           skipped+=("${branch} — ${reason:-${status}}") ;;
   esac
 done < "${RESULTS_FILE}"
 
-SUBJECT="${NOTIFY_SUBJECT:-Patch Propagation [${WI_ID}] on ${REPO_SLUG}: ${#opened[@]} PR/applied, ${#skipped[@]} skipped, ${#noaction[@]} no-action}"
+SUBJECT="${NOTIFY_SUBJECT:-Patch Propagation [${WI_ID}] on ${REPO_SLUG}: ${#opened[@]} PR/applied, ${#skipped[@]} skipped, ${#conflicts[@]} conflict, ${#noaction[@]} no-action}"
 
 print_section() {
   local title="$1"; shift
@@ -84,6 +86,7 @@ BODY_FILE="$(mktemp)"
   printf '\n'
   print_section "Pull requests opened / fixes applied" "${opened[@]}"
   print_section "Skipped (and why)" "${skipped[@]}"
+  print_section "Conflicts — needs manual resolution (no PR)" "${conflicts[@]}"
   print_section "No action / could not apply (received nothing)" "${noaction[@]}"
 } > "${BODY_FILE}"
 

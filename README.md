@@ -128,12 +128,17 @@ appears). Run it locally too: `PROPAGATION_MODE=pr ./scripts/notify_propagation.
 | `feature/ledger-audit` | Fix cherry-picked | PR opened |
 | `feature/compliance-reporting` | Fix cherry-picked | PR opened |
 | `feature/database-migration` | Fix cherry-picked | PR opened |
+| `feature/payment-hotfix` | Conflict (not applied) | No PR — conflict reported |
 | `infra/kubernetes-config` | Skipped (blocked) | No PR (blocked) |
 | `bugfix/payment-patch` | Source (skipped) | Source (skipped) |
 | `release/v1.0` | Fail (no affected file) | No PR |
 | All other branches | Skipped (no WI history) | Skipped |
 
-PR mode opens **4 pull requests** (one per eligible branch above).
-`infra/kubernetes-config` fully qualifies (WI history + affected file) but is
-listed in `BLOCKED_BRANCHES`, so it is skipped — demonstrating that the block
-overrides eligibility.
+PR mode opens **4 pull requests**. Two branches are intentional negative cases:
+
+- `infra/kubernetes-config` fully qualifies (WI history + affected file) but is in
+  `BLOCKED_BRANCHES`, so it is skipped — the block overrides eligibility.
+- `feature/payment-hotfix` has WI history and the affected file, but its competing
+  change makes the cherry-pick **conflict**. The conflict is **reported** (in the
+  summary, `results.tsv`, and the notification email) and the run **keeps going**
+  — a conflict never crashes the workflow.
