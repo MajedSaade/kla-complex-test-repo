@@ -1,0 +1,14 @@
+# Updated: 2026-06-15T16:56:49Z
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+      - name: payment-service
+        env:
+        - name: PAYMENT_QUEUE_LOCK_MODE
+          value: "rlock"  # WI-440219 mitigation
+        - name: PAYMENT_IDEMPOTENCY_ENABLED
+          value: "true"
+
