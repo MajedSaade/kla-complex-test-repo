@@ -463,8 +463,8 @@ fi
 log "Full log: ${SUMMARY_FILE}"
 
 if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
-  if [[ "${prs}" -lt 3 ]]; then
-    log "Error: PR mode requires at least 3 pull requests, opened ${prs}"
+  if [[ "${prs}" -lt 5 ]]; then
+    log "Error: PR mode requires at least 5 pull requests, opened ${prs}"
     exit 1
   fi
   if [[ "${unexpected_failed}" -gt 0 ]]; then

@@ -86,6 +86,10 @@ View open PRs: https://github.com/MajedSaade/kla-complex-test-repo/pulls
 | `feature/payment-gateway` | Fix cherry-picked | PR opened |
 | `feature/ledger-audit` | Fix cherry-picked | PR opened |
 | `feature/compliance-reporting` | Fix cherry-picked | PR opened |
+| `feature/database-migration` | Fix cherry-picked | PR opened |
+| `infra/kubernetes-config` | Fix cherry-picked | PR opened |
 | `bugfix/payment-patch` | Source (skipped) | Source (skipped) |
-| `release/v1.0`, `feature/database-migration`, `infra/kubernetes-config` | Fail (no affected file) | No PR |
+| `release/v1.0` | Fail (no affected file) | No PR |
 | All other branches | Skipped (no WI history) | Skipped |
+
+PR mode opens **5 pull requests** (one per eligible branch above).

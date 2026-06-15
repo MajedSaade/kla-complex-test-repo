@@ -748,6 +748,19 @@ commit_change \
   "INSERT INTO users (email, role) VALUES ('admin@staging.local', 'admin');" \
   "INSERT INTO payment_providers (name, active) VALUES ('stripe', true);"
 
+# Carries the pre-fix payment transaction queue so the definitive fix
+# cherry-picks cleanly (this branch is an expected PR target for ${WI}).
+commit_change \
+  "Vendor payment transaction queue for migration lock testing ${WI}" \
+  "src/payment/transaction_queue.py" \
+  "import threading" \
+  "from queue import Queue" \
+  "" \
+  "class TransactionQueue:" \
+  "    def __init__(self):" \
+  "        self._queue = Queue()" \
+  "        self._lock = threading.Lock()  # WI-440219: partial lock — race remains"
+
 # ---------------------------------------------------------------------------
 # feature/admin-dashboard (from main) — no WI
 # ---------------------------------------------------------------------------
@@ -861,6 +874,19 @@ commit_change \
   "      target:" \
   "        type: Utilization" \
   "        averageUtilization: 70"
+
+# Carries the pre-fix payment transaction queue so the definitive fix
+# cherry-picks cleanly (this branch is an expected PR target for ${WI}).
+commit_change \
+  "Bundle payment transaction queue into deployment image ${WI}" \
+  "src/payment/transaction_queue.py" \
+  "import threading" \
+  "from queue import Queue" \
+  "" \
+  "class TransactionQueue:" \
+  "    def __init__(self):" \
+  "        self._queue = Queue()" \
+  "        self._lock = threading.Lock()  # WI-440219: partial lock — race remains"
 
 # ---------------------------------------------------------------------------
 # Summary
