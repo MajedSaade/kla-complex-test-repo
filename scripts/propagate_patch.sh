@@ -31,6 +31,12 @@ BRANCH_SELECT_MODE="${BRANCH_SELECT_MODE:-wi-history}"
 PROPAGATION_MODE="${PROPAGATION_MODE:-direct}"
 DRY_RUN="${DRY_RUN:-false}"
 
+# Branches to skip even when they qualify (space- or comma-separated).
+BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-infra/kubernetes-config}"
+BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
+# Minimum PRs required for PR mode to succeed (eligible branches minus blocked).
+MIN_PRS="${MIN_PRS:-4}"
+
 LOG_DIR="${LOG_DIR:-${REPO_DIR}/.propagation-logs}"
 mkdir -p "${LOG_DIR}"
 SUMMARY_FILE="${LOG_DIR}/propagation-summary.txt"
@@ -97,6 +103,14 @@ list_branches() {
 
 is_propagation_branch() {
   [[ "$1" == propagate/* ]]
+}
+
+is_blocked() {
+  local b
+  for b in ${BLOCKED_BRANCHES}; do
+    [[ "$1" == "${b}" ]] && return 0
+  done
+  return 1
 }
 
 github_repo_slug() {
@@ -328,6 +342,7 @@ should_target_branch() {
 
   [[ "${branch}" == "${SOURCE_BRANCH}" ]] && return 1
   is_propagation_branch "${branch}" && return 1
+  is_blocked "${branch}" && return 1
   branch_has_fix "${branch}" && return 1
 
   case "${BRANCH_SELECT_MODE}" in
@@ -390,6 +405,12 @@ while IFS= read -r branch; do
 
   if [[ "${branch}" == "${SOURCE_BRANCH}" ]]; then
     log "SKIP  ${branch} — source branch (already contains fix)"
+    skipped=$((skipped + 1))
+    continue
+  fi
+
+  if is_blocked "${branch}"; then
+    log "SKIP  ${branch} — blocked by policy (BLOCKED_BRANCHES)"
     skipped=$((skipped + 1))
     continue
   fi
@@ -463,8 +484,8 @@ fi
 log "Full log: ${SUMMARY_FILE}"
 
 if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
-  if [[ "${prs}" -lt 5 ]]; then
-    log "Error: PR mode requires at least 5 pull requests, opened ${prs}"
+  if [[ "${prs}" -lt "${MIN_PRS}" ]]; then
+    log "Error: PR mode requires at least ${MIN_PRS} pull requests, opened ${prs}"
     exit 1
   fi
   if [[ "${unexpected_failed}" -gt 0 ]]; then

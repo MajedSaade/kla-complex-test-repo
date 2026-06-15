@@ -36,12 +36,14 @@ EXPECTED_FIXED=(
   feature/ledger-audit
   feature/compliance-reporting
   feature/database-migration
-  infra/kubernetes-config
 )
 
-# WI-history branches that must NOT get the fix (they lack the affected file).
+# WI-history branches that must NOT get the fix:
+#   release/v1.0           — lacks the affected file (cherry-pick fails)
+#   infra/kubernetes-config — qualifies, but blocked via BLOCKED_BRANCHES
 EXPECTED_WI_BUT_NO_FIX=(
   release/v1.0
+  infra/kubernetes-config
 )
 
 # Branches with no WI history at all (must be untouched). Only checked in
@@ -229,10 +231,10 @@ definitive_count="$(
     | grep -F "Apply definitive thread-safe fix" \
     | grep -cF "${WI_ID}" || true
 )"
-if [[ "${definitive_count}" -ge 6 ]]; then
+if [[ "${definitive_count}" -ge 5 ]]; then
   check_pass "Definitive fix propagated to payment branches (${definitive_count} commits)"
 else
-  check_fail "Expected ≥6 definitive-fix commits, found ${definitive_count}"
+  check_fail "Expected ≥5 definitive-fix commits, found ${definitive_count}"
 fi
 
 wi_branches=0
