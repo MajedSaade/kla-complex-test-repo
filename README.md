@@ -30,7 +30,7 @@ synthetic fixture in `.generated-fixture/` and acts as a generator regression te
 
 - **Work item:** `[WI-440219]`
 - **Source branch:** `bugfix/payment-patch`
-- **Fix commit must contain:** `Apply definitive thread-safe fix` and `[WI-440219]`
+- **Fix commit selection:** newest commit on the source branch whose message contains `[WI-440219]`, verified to include the definitive fix marker in `src/payment/transaction_queue.py`
 - **Affected file:** `src/payment/transaction_queue.py`
 - **Target branches (default `wi-history` mode):** any branch whose history mentions `WI-440219`
 

@@ -313,23 +313,29 @@ apply_via_pr() {
 }
 
 # ---------------------------------------------------------------------------
-# Locate the definitive fix commit
+# Locate the definitive fix commit: the newest commit on the source branch
+# whose message mentions the work item, verified to carry the fix marker in
+# the affected file (not merely the branch tip or any arbitrary substring).
 # ---------------------------------------------------------------------------
 
 SOURCE_REF="$(branch_ref "${SOURCE_BRANCH}")"
 
 SOURCE_COMMIT="$(
-  git log "${SOURCE_REF}" --format='%H %s' \
-    | grep -F "${FIX_MESSAGE_PATTERN}" \
-    | grep -F "${WI_TAG}" \
-    | head -1 \
-    | cut -d' ' -f1
+  git log "${SOURCE_REF}" --grep="${WI_ID}" --format='%H' -1 2>/dev/null || true
 )"
 
 if [[ -z "${SOURCE_COMMIT}" ]]; then
-  echo "Error: could not find definitive fix on '${SOURCE_BRANCH}' (ref: ${SOURCE_REF})" >&2
+  echo "Error: no commit mentioning '${WI_TAG}' on '${SOURCE_BRANCH}' (ref: ${SOURCE_REF})" >&2
   exit 1
 fi
+
+if ! git show "${SOURCE_COMMIT}:${AFFECTED_FILE}" 2>/dev/null | grep -Fq "${FIX_MARKER}"; then
+  echo "Error: newest '${WI_TAG}' commit on '${SOURCE_BRANCH}' (${SOURCE_COMMIT:0:7}) does not contain the definitive fix in '${AFFECTED_FILE}'" >&2
+  echo "       Message: $(git log -1 --format='%s' "${SOURCE_COMMIT}")" >&2
+  exit 1
+fi
+
+source_msg="$(git log -1 --format='%s' "${SOURCE_COMMIT}")"
 
 branch_mentions_wi() {
   local ref count
@@ -377,7 +383,9 @@ log "Work item  : ${WI_TAG}"
 log "Source     : ${SOURCE_BRANCH} (${SOURCE_REF} → ${SOURCE_COMMIT:0:7})"
 log "Selection  : ${BRANCH_SELECT_MODE}"
 log "Mode       : ${PROPAGATION_MODE}"
-log "Fix commit : $(git log -1 --format='%s' "${SOURCE_COMMIT}")"
+log "Fix commit : ${source_msg}"
+[[ "${source_msg}" != *"${FIX_MESSAGE_PATTERN}"* ]] \
+  && log "Note       : message does not contain '${FIX_MESSAGE_PATTERN}' (selected by ${WI_TAG} + fix marker)"
 [[ -n "${GITHUB_REPO}" ]] && log "GitHub     : ${GITHUB_REPO}"
 log ""
 
