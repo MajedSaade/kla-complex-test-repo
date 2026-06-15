@@ -1,0 +1,7 @@
+# Updated: 2026-06-15T16:56:48Z
+.btn-primary {
+  background: var(--color-primary);
+  padding: calc(var(--spacing-unit) * 1.5);
+  border-radius: 6px;
+}
+
