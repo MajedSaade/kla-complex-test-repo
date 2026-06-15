@@ -1,8 +1,0 @@
-# Updated: 2026-06-14T22:24:27Z
-logging:
-  level: INFO
-  format: json
-metrics:
-  exporter: prometheus
-  port: 9090
-
