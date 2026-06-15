@@ -237,7 +237,9 @@ cases work:
 flowchart TD
     S([branch]) --> P{propagate/* branch?}
     P -- yes --> SKIP1[skip silently]
-    P -- no --> SRC{== source branch?}
+    P -- no --> PR0{protected branch?<br/>main / master}
+    PR0 -- yes --> SKP[SKIP: protected branch]
+    PR0 -- no --> SRC{== source branch?}
     SRC -- yes --> SK2[SKIP: source already has fix]
     SRC -- no --> BL{in BLOCKED_BRANCHES?}
     BL -- yes --> SK3[SKIP: blocked by policy]
@@ -258,6 +260,7 @@ Helper predicates that drive this (all small one-liners near the middle):
 | `branch_has_file` | the affected file exists on the branch |
 | `branch_has_fix` | the affected file already contains the fix marker |
 | `is_blocked` | branch is in `BLOCKED_BRANCHES` |
+| `is_protected` | branch is in `PROTECTED_BRANCHES` (e.g. `main`) — never gets the fix |
 | `is_propagation_branch` | branch name starts with `propagate/` |
 | `should_target_branch` | combines all of the above for the chosen select mode |
 | `add_fixed_file` | writes the file's full fixed content (from the fix commit) and commits it — used when the branch lacks the file |
@@ -468,6 +471,7 @@ sequenceDiagram
 | `BRANCH_SELECT_MODE` | propagate, verify | `wi-history` | `wi-history` or `affected-file` |
 | `PROPAGATION_MODE` | propagate, verify | `direct` | `direct` or `pr` |
 | `BLOCKED_BRANCHES` | propagate, verify | `infra/kubernetes-config` | Branches to skip even if eligible |
+| `PROTECTED_BRANCHES` | propagate, verify | `main master` | Integration branches that never receive the fix |
 | `MIN_PRS` | propagate | `5` | PR-mode minimum to pass |
 | `DRY_RUN` | propagate | `false` | Don't push/open PRs |
 | `NOTIFY_EMAIL_TO/FROM`, `SMTP_*` | notify | — | Email delivery (optional) |
@@ -486,7 +490,8 @@ sequenceDiagram
 | `feature/payment-hotfix` | conflict (reported) | no PR — conflict reported |
 | `infra/kubernetes-config` | skipped (blocked) | no PR (blocked) |
 | `bugfix/payment-patch` | source (skipped) | source (skipped) |
-| 7 other branches | skipped (no WI) | skipped |
+| `main` | skipped (protected) | skipped (protected) |
+| 6 other branches | skipped (no WI) | skipped |
 
 Net result: **5 applications / 5 PRs** (including `release/v1.0`, which gets the
 file added), with two intentional negative cases (`payment-hotfix` conflict,
