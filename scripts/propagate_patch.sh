@@ -23,7 +23,7 @@ REPO_DIR="$(cd "${REPO_DIR}" && pwd)"
 
 WI_ID="${WI_ID:-WI-440219}"
 WI_TAG="[${WI_ID}]"
-SOURCE_BRANCH="${SOURCE_BRANCH:-bugfix/payment-patch}"
+SOURCE_BRANCH="${SOURCE_BRANCH:-20-bugfix/payment-patch}"
 FIX_MESSAGE_PATTERN="${FIX_MESSAGE_PATTERN:-Apply definitive thread-safe fix}"
 AFFECTED_FILE="${AFFECTED_FILE:-src/payment/transaction_queue.py}"
 FIX_MARKER="${FIX_MARKER:-threading.RLock()  # WI-440219: definitive thread-safe fix}"
@@ -32,7 +32,12 @@ PROPAGATION_MODE="${PROPAGATION_MODE:-direct}"
 DRY_RUN="${DRY_RUN:-false}"
 
 # Branches to skip even when they qualify (space- or comma-separated).
-BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-infra/kubernetes-config}"
+# 70-infra/kubernetes-config is the policy-blocked branch. The unprefixed
+# "infra/kubernetes-config" is its pre-rename name, still present on origin as a
+# protected branch that could not be deleted during the numeric-prefix rename;
+# it is blocked too so the stale ref is never targeted (safe to drop once that
+# branch is removed).
+BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-70-infra/kubernetes-config infra/kubernetes-config}"
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
 # Integration branches that must NEVER receive a propagation PR/cherry-pick,
 # regardless of WI history (space- or comma-separated).
@@ -389,6 +394,16 @@ branch_mentions_wi() {
   [[ "${count}" -gt 0 ]]
 }
 
+# Eligibility by branch NAME: a branch qualifies only when its name sorts
+# strictly AFTER the source branch name. Comparison is byte-wise (LC_ALL=C) so
+# the numeric prefixes that branches carry (e.g. 20-bugfix/payment-patch) give a
+# stable, locale-independent ordering: a branch numbered higher than the fix
+# branch is "after" it. The subshell scopes LC_ALL to the comparison only.
+name_after_source() {
+  [[ "$1" == "${SOURCE_BRANCH}" ]] && return 1
+  ( LC_ALL=C; [[ "$1" > "${SOURCE_BRANCH}" ]] )
+}
+
 branch_has_file() {
   git cat-file -e "$(branch_check_ref "$1"):${AFFECTED_FILE}" 2>/dev/null
 }
@@ -405,6 +420,7 @@ should_target_branch() {
   is_protected "${branch}" && return 1
   is_blocked "${branch}" && return 1
   branch_has_fix "${branch}" && return 1
+  name_after_source "${branch}" || return 1
 
   case "${BRANCH_SELECT_MODE}" in
     wi-history) branch_mentions_wi "${branch}" ;;
@@ -420,7 +436,7 @@ log "========================"
 log "Repository : $(pwd)"
 log "Work item  : ${WI_TAG}"
 log "Source     : ${SOURCE_BRANCH} (${SOURCE_REF} → ${SOURCE_COMMIT:0:7})"
-log "Selection  : ${BRANCH_SELECT_MODE}"
+log "Selection  : ${BRANCH_SELECT_MODE} + name lexicographically after ${SOURCE_BRANCH}"
 log "Mode       : ${PROPAGATION_MODE}"
 log "Fix commit : ${source_msg}"
 [[ "${source_msg}" != *"${FIX_MESSAGE_PATTERN}"* ]] \
@@ -517,7 +533,9 @@ while IFS= read -r branch; do
 
   if ! should_target_branch "${branch}"; then
     reason="not selected by ${BRANCH_SELECT_MODE}"
-    if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] && ! branch_mentions_wi "${branch}"; then
+    if ! name_after_source "${branch}"; then
+      reason="name sorts on/before fix branch '${SOURCE_BRANCH}'"
+    elif [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] && ! branch_mentions_wi "${branch}"; then
       reason="no ${WI_TAG} in branch commit history"
     elif [[ "${BRANCH_SELECT_MODE}" == "affected-file" ]] && ! branch_has_file "${branch}"; then
       reason="'${AFFECTED_FILE}' not present"

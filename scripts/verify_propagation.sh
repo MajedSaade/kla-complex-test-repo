@@ -2,15 +2,18 @@
 #
 # verify_propagation.sh — Assert cross-branch patch propagation outcomes.
 #
-# Two verification modes (selected by PROPAGATION_MODE, matching propagate_patch.sh):
+# Propagation is always via pull request, so verification is fully dynamic: it
+# rediscovers the real branches (local heads + origin/*), recomputes eligibility
+# from git state exactly like propagate_patch.sh, and asserts each branch's PR
+# outcome. No branch names are hardcoded.
 #
-#   PROPAGATION_MODE=direct  (default) — the fix was cherry-picked onto the
-#       eligible branches in this repo; assert it is present where expected
-#       and absent everywhere else.
-#
-#   PROPAGATION_MODE=pr      — the fix was proposed via pull requests; assert a
-#       PR was opened (or the fix is already merged) for each eligible branch
-#       and that no PR/fix landed on the branches that should be skipped.
+# A branch MUST have a PR (or already carry the fix) when its NAME sorts
+# lexicographically AFTER the fix branch AND it is selected by the branch mode
+# AND is not the source, a propagation branch, protected, or blocked. Every
+# other branch MUST NOT have a
+# PR. A genuine cherry-pick conflict is accepted as a reported, non-fatal
+# outcome. Recorded PR_OPENED/PR_EXISTING entries also satisfy a branch, so a
+# DRY_RUN propagation (which records intent without pushing) verifies cleanly.
 #
 # Usage:
 #   ./scripts/verify_propagation.sh [REPO_DIR]
@@ -24,54 +27,21 @@ REPO_DIR="$(cd "${REPO_DIR}" && pwd)"
 WI_ID="${WI_ID:-WI-440219}"
 AFFECTED_FILE="${AFFECTED_FILE:-src/payment/transaction_queue.py}"
 FIX_MARKER="${FIX_MARKER:-threading.RLock()  # WI-440219: definitive thread-safe fix}"
-ENQUEUE_MARKER="${ENQUEUE_MARKER:-def enqueue(self, txn: dict) -> None:}"
-SOURCE_BRANCH="${SOURCE_BRANCH:-bugfix/payment-patch}"
+SOURCE_BRANCH="${SOURCE_BRANCH:-20-bugfix/payment-patch}"
 BRANCH_SELECT_MODE="${BRANCH_SELECT_MODE:-wi-history}"
-PROPAGATION_MODE="${PROPAGATION_MODE:-direct}"
 PRS_FILE="${PRS_FILE:-${REPO_DIR}/.propagation-logs/pull-requests.txt}"
 SUMMARY_FILE="${SUMMARY_FILE:-${REPO_DIR}/.propagation-logs/propagation-summary.txt}"
 RESULTS_FILE="${RESULTS_FILE:-${REPO_DIR}/.propagation-logs/results.tsv}"
 
-# Same block policy as propagate_patch.sh (space- or comma-separated).
-BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-infra/kubernetes-config}"
+# Same block policy as propagate_patch.sh (space- or comma-separated). The
+# unprefixed "infra/kubernetes-config" is the pre-rename name still present on
+# origin as a protected branch; it is blocked too so the stale ref verifies as
+# "no PR" (safe to drop once that branch is removed).
+BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-70-infra/kubernetes-config infra/kubernetes-config}"
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
 # Protected integration branches that must never receive a PR (matches propagate).
 PROTECTED_BRANCHES="${PROTECTED_BRANCHES:-main master}"
 PROTECTED_BRANCHES="${PROTECTED_BRANCHES//,/ }"
-
-# Direct-mode (fixture self-test) expectations. These describe the KNOWN shape
-# of the synthetic fixture produced by generate_complex_repo.sh — never real
-# GitHub branches. The PR-mode path below derives everything dynamically.
-#
-# Branches that already carry the affected file and get the fix cherry-picked:
-EXPECTED_FIXED=(
-  feature/payment-gateway
-  feature/ledger-audit
-  feature/compliance-reporting
-  feature/database-migration
-)
-# WI branches that LACK the affected file and get it ADDED with the fix:
-#   release/v1.0 — has WI history but no transaction_queue.py; the file is added.
-EXPECTED_WI_FILE_ADDED=(
-  release/v1.0
-)
-# WI branches that end up WITHOUT the fix:
-#   infra/kubernetes-config — qualifies, but blocked via BLOCKED_BRANCHES
-#   feature/payment-hotfix  — has the file, but its competing change makes the
-#                             cherry-pick conflict, so the fix is not applied
-EXPECTED_WI_BUT_NO_FIX=(
-  infra/kubernetes-config
-  feature/payment-hotfix
-)
-EXPECTED_NO_WI=(
-  main
-  feature/user-auth
-  feature/ui-ux
-  feature/analytics-pipeline
-  feature/notifications
-  feature/mobile-api
-  feature/admin-dashboard
-)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -82,17 +52,14 @@ fail=0
 check_pass() { echo -e "${GREEN}PASS${NC}  $*"; pass=$((pass + 1)); }
 check_fail() { echo -e "${RED}FAIL${NC}  $*" >&2; fail=$((fail + 1)); }
 
-# Resolve a branch to a usable ref. PR mode prefers origin/* (the live repo
-# state); direct mode prefers the local branch the cherry-pick wrote to.
+# Resolve a branch to a usable ref, preferring origin/* (the live repo state)
+# and falling back to a local head (e.g. a freshly generated fixture).
 branch_ref() {
   local branch="$1"
-  if [[ "${PROPAGATION_MODE}" == "pr" ]] \
-    && git -C "${REPO_DIR}" show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null; then
+  if git -C "${REPO_DIR}" show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null; then
     echo "origin/${branch}"
   elif git -C "${REPO_DIR}" show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
     echo "${branch}"
-  elif git -C "${REPO_DIR}" show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null; then
-    echo "origin/${branch}"
   else
     echo "${branch}"
   fi
@@ -127,8 +94,7 @@ is_protected() {
 }
 
 # Discover every real branch (local heads + origin/*), deduplicated. This is
-# what makes PR-mode verification reflect the actual GitHub repo with no
-# hardcoded branch names.
+# what makes verification reflect the actual repo with no hardcoded names.
 list_branches() {
   {
     git -C "${REPO_DIR}" for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null
@@ -137,22 +103,33 @@ list_branches() {
   } | grep -vxE 'HEAD|origin' | sort -u
 }
 
+# --- "Name sorts after the fix branch" detection (mirrors propagate_patch.sh) -
+# Eligibility is decided by branch NAME, not commit dates: a branch qualifies
+# only when its name sorts strictly AFTER the source branch name. Comparison is
+# byte-wise (LC_ALL=C) so the numeric prefixes branches carry (e.g.
+# 20-bugfix/payment-patch) give a stable, locale-independent ordering.
+name_after_source() {
+  [[ "$1" == "${SOURCE_BRANCH}" ]] && return 1
+  ( LC_ALL=C; [[ "$1" > "${SOURCE_BRANCH}" ]] )
+}
+
 # Find a recorded PR url for a branch, either from the machine-readable list or
 # the human-readable summary written by propagate_patch.sh.
 pr_for_branch() {
   local branch="$1" url=""
   if [[ -f "${PRS_FILE}" ]]; then
-    url="$(grep -F "${branch}|" "${PRS_FILE}" 2>/dev/null | head -1 | cut -d'|' -f2-)"
+    url="$(grep -F "${branch}|" "${PRS_FILE}" 2>/dev/null | head -1 | cut -d'|' -f2- || true)"
   fi
   if [[ -z "${url}" && -f "${SUMMARY_FILE}" ]]; then
     url="$(grep -E "^PR[[:space:]]+${branch//\//\\/}[[:space:]]" "${SUMMARY_FILE}" 2>/dev/null \
-      | head -1 | grep -oE 'https://github.com/[^[:space:]]+' | head -1)"
+      | head -1 | grep -oE 'https://github.com/[^[:space:]]+' | head -1 || true)"
   fi
   [[ -n "${url}" ]] && echo "${url}"
 }
 
 # Look up the recorded outcome status for a branch from results.tsv (the genuine
-# result of the propagation run, including real cherry-pick CONFLICTs).
+# result of the propagation run, including real cherry-pick CONFLICTs and the
+# PR_OPENED intent recorded by a DRY_RUN run).
 recorded_status() {
   [[ -f "${RESULTS_FILE}" ]] || return 0
   awk -F'\t' -v b="$1" '$2==b {print $1; exit}' "${RESULTS_FILE}"
@@ -161,7 +138,7 @@ recorded_status() {
 echo "Propagation Verification"
 echo "========================"
 echo "Repository : ${REPO_DIR}"
-echo "Mode       : ${PROPAGATION_MODE} (${BRANCH_SELECT_MODE})"
+echo "Selection  : ${BRANCH_SELECT_MODE} + name lexicographically after ${SOURCE_BRANCH}"
 echo ""
 
 if [[ ! -d "${REPO_DIR}/.git" ]]; then
@@ -169,178 +146,93 @@ if [[ ! -d "${REPO_DIR}/.git" ]]; then
   exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# PR mode (LIVE): fully dynamic. Discover the real branches, recompute
-# eligibility from git state exactly like propagate_patch.sh, and assert each
-# branch's PR outcome. No branch names are hardcoded here.
-#
-# A branch MUST have a PR (or already carry the fix) when it is selected by the
-# branch mode AND can actually receive the fix (affected file present) AND is
-# not the source, a propagation branch, or blocked. Every other branch MUST NOT
-# have a PR.
-# ---------------------------------------------------------------------------
-if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
-  if [[ ! -f "${PRS_FILE}" && ! -f "${SUMMARY_FILE}" ]]; then
-    check_fail "Missing propagation logs — run propagate_patch.sh with PROPAGATION_MODE=pr first"
-    exit 1
-  fi
+if [[ ! -f "${PRS_FILE}" && ! -f "${SUMMARY_FILE}" && ! -f "${RESULTS_FILE}" ]]; then
+  check_fail "Missing propagation logs — run propagate_patch.sh first"
+  exit 1
+fi
 
-  # Classify a branch into: eligible | blocked | source | propagation | skip-*.
-  classify_branch() {
-    local b="$1"
-    [[ "${b}" == "${SOURCE_BRANCH}" ]] && { echo source; return; }
-    is_propagation_branch "${b}" && { echo propagation; return; }
-    is_protected "${b}" && { echo protected; return; }
-    is_blocked "${b}" && { echo blocked; return; }
-    case "${BRANCH_SELECT_MODE}" in
-      wi-history)
-        branch_mentions_wi "${b}" && echo eligible || echo skip-no-wi ;;
-      affected-file)
-        branch_has_file "${b}" && echo eligible || echo skip-no-file ;;
-      *) echo skip-no-wi ;;
-    esac
-  }
+# Classify a branch: eligible | source | propagation | protected | blocked |
+# skip-before | skip-no-wi | skip-no-file.
+classify_branch() {
+  local b="$1"
+  [[ "${b}" == "${SOURCE_BRANCH}" ]] && { echo source; return; }
+  is_propagation_branch "${b}" && { echo propagation; return; }
+  is_protected "${b}" && { echo protected; return; }
+  is_blocked "${b}" && { echo blocked; return; }
+  name_after_source "${b}" || { echo skip-before; return; }
+  case "${BRANCH_SELECT_MODE}" in
+    wi-history)
+      branch_mentions_wi "${b}" && echo eligible || echo skip-no-wi ;;
+    affected-file)
+      branch_has_file "${b}" && echo eligible || echo skip-no-file ;;
+    *) echo skip-no-wi ;;
+  esac
+}
 
-  eligible=0
-  satisfied=0
-  conflicted=0
+# A branch is "accounted for" when it has a recorded/real PR, already carries
+# the fix, or is a reported conflict.
+branch_satisfied() {
+  local branch="$1" status
+  [[ -n "$(pr_for_branch "${branch}" || true)" ]] && return 0
+  branch_has_fix "${branch}" && return 0
+  status="$(recorded_status "${branch}")"
+  [[ "${status}" == "PR_OPENED" || "${status}" == "PR_EXISTING" ]]
+}
 
-  echo "--- Branches selected for the fix (PR expected, unless it conflicts) ---"
-  while IFS= read -r branch; do
-    [[ "$(classify_branch "${branch}")" == "eligible" ]] || continue
-    eligible=$((eligible + 1))
-    url="$(pr_for_branch "${branch}" || true)"
+eligible=0
+satisfied=0
+conflicted=0
+
+echo "--- Branches selected for the fix (PR expected, unless it conflicts) ---"
+while IFS= read -r branch; do
+  [[ "$(classify_branch "${branch}")" == "eligible" ]] || continue
+  eligible=$((eligible + 1))
+  url="$(pr_for_branch "${branch}" || true)"
+  if branch_satisfied "${branch}"; then
     if [[ -n "${url}" ]]; then
       check_pass "${branch} — PR recorded (${url})"
-      satisfied=$((satisfied + 1))
     elif branch_has_fix "${branch}"; then
       check_pass "${branch} — fix already on branch (no new PR needed)"
-      satisfied=$((satisfied + 1))
-    elif [[ "$(recorded_status "${branch}")" == "CONFLICT" ]]; then
-      check_pass "${branch} — fix conflicts; reported for manual resolution (no PR, non-fatal)"
-      conflicted=$((conflicted + 1))
     else
-      check_fail "${branch} — eligible but no PR recorded and fix not present"
+      check_pass "${branch} — PR recorded (intent logged)"
     fi
-  done < <(list_branches)
-
-  echo ""
-  echo "--- Branches that must NOT have a PR (and why) ---"
-  while IFS= read -r branch; do
-    case "$(classify_branch "${branch}")" in
-      eligible|propagation) continue ;;
-      source)        reason="source branch" ;;
-      protected)     reason="protected integration branch" ;;
-      blocked)       reason="blocked by policy" ;;
-      skip-no-wi)    reason="no ${WI_ID} in history" ;;
-      skip-no-file)  reason="affected file not present" ;;
-      *)             reason="not selected" ;;
-    esac
-    url="$(pr_for_branch "${branch}" || true)"
-    if [[ -n "${url}" ]]; then
-      check_fail "${branch} — unexpected PR ${url} (expected none: ${reason})"
-    else
-      check_pass "${branch} — no PR (${reason})"
-    fi
-  done < <(list_branches)
-
-  echo ""
-  if [[ "${eligible}" -eq 0 ]]; then
-    check_fail "No eligible branches found — nothing to propagate"
-  elif [[ $((satisfied + conflicted)) -eq "${eligible}" ]]; then
-    check_pass "All ${eligible} selected branch(es) accounted for: ${satisfied} with PR/fix, ${conflicted} conflict(s) reported"
+    satisfied=$((satisfied + 1))
+  elif [[ "$(recorded_status "${branch}")" == "CONFLICT" ]]; then
+    check_pass "${branch} — fix conflicts; reported for manual resolution (no PR, non-fatal)"
+    conflicted=$((conflicted + 1))
   else
-    check_fail "Only $((satisfied + conflicted))/${eligible} selected branch(es) accounted for"
+    check_fail "${branch} — eligible but no PR recorded and fix not present"
   fi
-
-  echo ""
-  echo "Results: ${pass} passed, ${fail} failed"
-  [[ "${fail}" -gt 0 ]] && exit 1
-  exit 0
-fi
-
-# ---------------------------------------------------------------------------
-# Direct mode: assert the fix is present/absent on the right branches.
-# ---------------------------------------------------------------------------
-EXPECTED_FIXED=(bugfix/payment-patch "${EXPECTED_FIXED[@]}")
-# In wi-history mode, branches that lacked the file get it added with the fix,
-# so they must also end up carrying the definitive fix.
-if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]]; then
-  EXPECTED_FIXED=("${EXPECTED_FIXED[@]}" "${EXPECTED_WI_FILE_ADDED[@]}")
-fi
-
-echo "--- Branches that MUST have the fix ---"
-for branch in "${EXPECTED_FIXED[@]}"; do
-  if ! branch_has_file "${branch}"; then
-    check_fail "${branch} — expected file '${AFFECTED_FILE}' missing"
-    continue
-  fi
-  content="$(branch_content "${branch}")"
-  if echo "${content}" | grep -Fq "${FIX_MARKER}" \
-    && echo "${content}" | grep -Fq "${ENQUEUE_MARKER}"; then
-    check_pass "${branch} — definitive fix present"
-  else
-    check_fail "${branch} — fix marker or enqueue method missing"
-  fi
-done
-
-if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]]; then
-  echo ""
-  echo "--- WI branches that should NOT receive the fix (blocked or conflicting) ---"
-  for branch in "${EXPECTED_WI_BUT_NO_FIX[@]}"; do
-    if ! branch_mentions_wi "${branch}"; then
-      check_fail "${branch} — expected WI mention in history"
-    elif branch_has_fix "${branch}"; then
-      check_fail "${branch} — should not have fix (no ${AFFECTED_FILE})"
-    else
-      check_pass "${branch} — WI history match, fix correctly not applied"
-    fi
-  done
-
-  echo ""
-  echo "--- Branches with no WI in history (should be untouched) ---"
-  for branch in "${EXPECTED_NO_WI[@]}"; do
-    if branch_mentions_wi "${branch}"; then
-      check_fail "${branch} — unexpected WI mention in history"
-    elif branch_has_fix "${branch}"; then
-      check_fail "${branch} — should not have received fix"
-    else
-      check_pass "${branch} — no WI history, correctly skipped"
-    fi
-  done
-else
-  echo ""
-  echo "--- Branches that must NOT have the affected file ---"
-  for branch in "${EXPECTED_WI_BUT_NO_FIX[@]}" "${EXPECTED_NO_WI[@]}"; do
-    if branch_has_file "${branch}"; then
-      check_fail "${branch} — unexpected file '${AFFECTED_FILE}' present"
-    else
-      check_pass "${branch} — no affected file (correctly skipped)"
-    fi
-  done
-fi
+done < <(list_branches)
 
 echo ""
-echo "--- WI noise check ---"
-definitive_count="$(
-  git -C "${REPO_DIR}" log --all --oneline \
-    | grep -F "Apply definitive thread-safe fix" \
-    | grep -cF "${WI_ID}" || true
-)"
-if [[ "${definitive_count}" -ge 5 ]]; then
-  check_pass "Definitive fix propagated to payment branches (${definitive_count} commits)"
-else
-  check_fail "Expected ≥5 definitive-fix commits, found ${definitive_count}"
-fi
+echo "--- Branches that must NOT have a PR (and why) ---"
+while IFS= read -r branch; do
+  case "$(classify_branch "${branch}")" in
+    eligible|propagation) continue ;;
+    source)        reason="source branch" ;;
+    protected)     reason="protected integration branch" ;;
+    blocked)       reason="blocked by policy" ;;
+    skip-before)   reason="name sorts on/before the fix branch" ;;
+    skip-no-wi)    reason="no ${WI_ID} in history" ;;
+    skip-no-file)  reason="affected file not present" ;;
+    *)             reason="not selected" ;;
+  esac
+  url="$(pr_for_branch "${branch}" || true)"
+  if [[ -n "${url}" ]]; then
+    check_fail "${branch} — unexpected PR ${url} (expected none: ${reason})"
+  else
+    check_pass "${branch} — no PR (${reason})"
+  fi
+done < <(list_branches)
 
-wi_branches=0
-for branch in $(git -C "${REPO_DIR}" branch --format='%(refname:short)'); do
-  branch_mentions_wi "${branch}" && wi_branches=$((wi_branches + 1))
-done
-if [[ "${wi_branches}" -eq 8 ]]; then
-  check_pass "Eight branches mention ${WI_ID} in history (expected WI footprint)"
+echo ""
+if [[ "${eligible}" -eq 0 ]]; then
+  check_fail "No eligible branches found — nothing to propagate"
+elif [[ $((satisfied + conflicted)) -eq "${eligible}" ]]; then
+  check_pass "All ${eligible} selected branch(es) accounted for: ${satisfied} with PR/fix, ${conflicted} conflict(s) reported"
 else
-  check_fail "Expected 8 WI branches, found ${wi_branches}"
+  check_fail "Only $((satisfied + conflicted))/${eligible} selected branch(es) accounted for"
 fi
 
 echo ""

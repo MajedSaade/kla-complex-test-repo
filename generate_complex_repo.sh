@@ -148,9 +148,9 @@ commit_change \
 
 # --- release/v1.0 forks from early main (after 2 baseline commits) ---
 
-section "Branch: release/v1.0 (from early main)"
+section "Branch: 05-release/v1.0 (from early main)"
 
-new_branch "release/v1.0"
+new_branch "05-release/v1.0"
 
 commit_change \
   "Stage production build pipeline configuration" \
@@ -228,9 +228,9 @@ commit_change \
 # feature/user-auth (from main)
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/user-auth (from main)"
+section "Branch: 10-feature/user-auth (from main)"
 
-new_branch "feature/user-auth" "main"
+new_branch "10-feature/user-auth" "main"
 
 commit_change \
   "Implement JWT token issuance and validation middleware" \
@@ -285,9 +285,9 @@ commit_change \
 # feature/payment-gateway (from main) — WI in commits #2 and #4
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/payment-gateway (from main)"
+section "Branch: 15-feature/payment-gateway (from main)"
 
-new_branch "feature/payment-gateway" "main"
+new_branch "15-feature/payment-gateway" "main"
 
 commit_change \
   "Scaffold payment gateway service and routing layer" \
@@ -342,9 +342,9 @@ commit_change \
 # Commit #5 = definitive fix (propagation target)
 # ---------------------------------------------------------------------------
 
-section "Branch: bugfix/payment-patch (from feature/payment-gateway)"
+section "Branch: 20-bugfix/payment-patch (from 15-feature/payment-gateway)"
 
-new_branch "bugfix/payment-patch" "feature/payment-gateway"
+new_branch "20-bugfix/payment-patch" "15-feature/payment-gateway"
 
 commit_change \
   "Reproduce race condition in concurrent payment processing" \
@@ -399,33 +399,12 @@ commit_change \
   "            return txn['id'] in self._processed_ids"
 
 # ---------------------------------------------------------------------------
-# feature/payment-hotfix (from feature/payment-gateway)
-# Has WI history + the affected file, but adds a COMPETING change to the same
-# tail of transaction_queue.py — so cherry-picking the definitive fix produces
-# a real merge conflict (not a missing-file failure). Propagation must report
-# this and keep going, never crash.
-# ---------------------------------------------------------------------------
-
-section "Branch: feature/payment-hotfix (from feature/payment-gateway)"
-
-new_branch "feature/payment-hotfix" "feature/payment-gateway"
-
-commit_change \
-  "Apply competing in-branch lock workaround for payment race ${WI}" \
-  "src/payment/transaction_queue.py" \
-  "" \
-  "    # Local workaround — intentionally diverges from the definitive fix" \
-  "    def enqueue(self, txn: dict) -> None:" \
-  "        with self._lock:  # competing approach, conflicts with the RLock fix" \
-  "            self._queue.put(txn)"
-
-# ---------------------------------------------------------------------------
 # feature/ui-ux (from main)
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/ui-ux (from main)"
+section "Branch: 30-feature/ui-ux (from main)"
 
-new_branch "feature/ui-ux" "main"
+new_branch "30-feature/ui-ux" "main"
 
 commit_change \
   "Establish design system tokens and color palette" \
@@ -474,9 +453,9 @@ commit_change \
 # feature/analytics-pipeline (from main) — no WI
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/analytics-pipeline (from main)"
+section "Branch: 35-feature/analytics-pipeline (from main)"
 
-new_branch "feature/analytics-pipeline" "main"
+new_branch "35-feature/analytics-pipeline" "main"
 
 commit_change \
   "Define analytics event schema and ingestion contract" \
@@ -522,9 +501,9 @@ commit_change \
 # feature/ledger-audit (from feature/payment-gateway) — WI commit #2 (1/4)
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/ledger-audit (from feature/payment-gateway)"
+section "Branch: 40-feature/ledger-audit (from 15-feature/payment-gateway)"
 
-new_branch "feature/ledger-audit" "feature/payment-gateway"
+new_branch "40-feature/ledger-audit" "15-feature/payment-gateway"
 
 commit_change \
   "Initialize immutable ledger store with append-only log" \
@@ -571,9 +550,9 @@ commit_change \
 # feature/notifications (from main) — no WI
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/notifications (from main)"
+section "Branch: 45-feature/notifications (from main)"
 
-new_branch "feature/notifications" "main"
+new_branch "45-feature/notifications" "main"
 
 commit_change \
   "Scaffold notification service with template engine" \
@@ -626,9 +605,9 @@ commit_change \
 # feature/compliance-reporting (from feature/ledger-audit) — WI commit #4 (2/4)
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/compliance-reporting (from feature/ledger-audit)"
+section "Branch: 50-feature/compliance-reporting (from 40-feature/ledger-audit)"
 
-new_branch "feature/compliance-reporting" "feature/ledger-audit"
+new_branch "50-feature/compliance-reporting" "40-feature/ledger-audit"
 
 commit_change \
   "Define compliance report schema for financial filings" \
@@ -676,9 +655,9 @@ commit_change \
 # feature/mobile-api (from main) — no WI
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/mobile-api (from main)"
+section "Branch: 55-feature/mobile-api (from main)"
 
-new_branch "feature/mobile-api" "main"
+new_branch "55-feature/mobile-api" "main"
 
 commit_change \
   "Scaffold mobile REST API with FastAPI router" \
@@ -727,9 +706,9 @@ commit_change \
 # feature/database-migration (from main) — WI commit #1 (3/4)
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/database-migration (from main)"
+section "Branch: 60-feature/database-migration (from main)"
 
-new_branch "feature/database-migration" "main"
+new_branch "60-feature/database-migration" "main"
 
 commit_change \
   "Add schema migration for payment table locks related to ${WI}" \
@@ -769,26 +748,13 @@ commit_change \
   "INSERT INTO users (email, role) VALUES ('admin@staging.local', 'admin');" \
   "INSERT INTO payment_providers (name, active) VALUES ('stripe', true);"
 
-# Carries the pre-fix payment transaction queue so the definitive fix
-# cherry-picks cleanly (this branch is an expected PR target for ${WI}).
-commit_change \
-  "Vendor payment transaction queue for migration lock testing ${WI}" \
-  "src/payment/transaction_queue.py" \
-  "import threading" \
-  "from queue import Queue" \
-  "" \
-  "class TransactionQueue:" \
-  "    def __init__(self):" \
-  "        self._queue = Queue()" \
-  "        self._lock = threading.Lock()  # WI-440219: partial lock — race remains"
-
 # ---------------------------------------------------------------------------
 # feature/admin-dashboard (from main) — no WI
 # ---------------------------------------------------------------------------
 
-section "Branch: feature/admin-dashboard (from main)"
+section "Branch: 65-feature/admin-dashboard (from main)"
 
-new_branch "feature/admin-dashboard" "main"
+new_branch "65-feature/admin-dashboard" "main"
 
 commit_change \
   "Scaffold admin dashboard shell with navigation layout" \
@@ -833,9 +799,9 @@ commit_change \
 # infra/kubernetes-config (from main) — WI commit #3 (4/4)
 # ---------------------------------------------------------------------------
 
-section "Branch: infra/kubernetes-config (from main)"
+section "Branch: 70-infra/kubernetes-config (from main)"
 
-new_branch "infra/kubernetes-config" "main"
+new_branch "70-infra/kubernetes-config" "main"
 
 commit_change \
   "Add base Helm chart for payment service deployment" \
@@ -896,19 +862,6 @@ commit_change \
   "        type: Utilization" \
   "        averageUtilization: 70"
 
-# Carries the pre-fix payment transaction queue so the definitive fix
-# cherry-picks cleanly (this branch is an expected PR target for ${WI}).
-commit_change \
-  "Bundle payment transaction queue into deployment image ${WI}" \
-  "src/payment/transaction_queue.py" \
-  "import threading" \
-  "from queue import Queue" \
-  "" \
-  "class TransactionQueue:" \
-  "    def __init__(self):" \
-  "        self._queue = Queue()" \
-  "        self._lock = threading.Lock()  # WI-440219: partial lock — race remains"
-
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
@@ -928,8 +881,8 @@ echo
 echo "Commits mentioning ${WI}:"
 list_wi_commits | sed 's/^/  /'
 echo
-echo "Target propagation commit (bugfix/payment-patch):"
-git log bugfix/payment-patch --oneline -1 | sed 's/^/  /'
+echo "Target propagation commit (20-bugfix/payment-patch):"
+git log 20-bugfix/payment-patch --oneline -1 | sed 's/^/  /'
 echo
 echo "Full branch graph:"
 print_branch_graph

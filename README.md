@@ -1,86 +1,115 @@
 # KLA Complex Test Repository
 
 A self-contained fixture + tooling for **cross-branch patch propagation**. It
-builds a realistic 14-branch enterprise repository, finds a single "definitive
-fix" commit, and propagates it to every branch that should receive it — either
-directly (cherry-pick) or by opening a pull request.
+builds a realistic 15-branch enterprise repository, finds a single "definitive
+fix" commit, and opens a pull request to propagate it to every branch that
+should receive it. Two rules decide who is eligible: the branch's **name must
+sort lexicographically after the branch that holds the fix**, and (by default)
+its history must mention the work item. Branches carry a two-digit numeric
+prefix (e.g. `20-bugfix/payment-patch`) so this ordering is explicit and
+controllable — a branch numbered higher than the fix branch is "after" it. The
+fix is **always** proposed via a pull request — it is never cherry-picked
+directly onto a live branch.
 
 ## Layout
 
 | Path | Purpose |
 |------|---------|
-| `generate_complex_repo.sh` | Builds the 14-branch fixture from scratch |
-| `scripts/propagate_patch.sh` | Finds the fix and applies it (direct or PR mode) |
-| `scripts/verify_propagation.sh` | Asserts the expected outcome (direct or PR mode) |
+| `generate_complex_repo.sh` | Builds the 15-branch fixture from scratch |
+| `scripts/propagate_patch.sh` | Finds the fix and opens a propagation PR per eligible branch |
+| `scripts/verify_propagation.sh` | Asserts the expected PR outcome |
 | `scripts/notify_propagation.sh` | Emails / summarizes the propagation outcome |
-| `scripts/run_pipeline.sh` | Local end-to-end run: generate → propagate → verify |
+| `scripts/run_pipeline.sh` | Local end-to-end run (dry-run): generate → propagate → verify |
 | `.github/workflows/patch-propagation.yml` | CI: integration test + live PR opening |
 | `ARCHITECTURE.md` | Detailed walkthrough of how everything works (with diagrams) |
 
 > New here? Read **[ARCHITECTURE.md](ARCHITECTURE.md)** for a full, diagrammed
 > explanation of every file, function, and how the pieces connect.
 
-### Live vs. fixture, and the "no hardcoding" guarantee
+### Dynamic, with the "no hardcoding" guarantee
 
-`propagate_patch.sh` always **discovers branches dynamically** (local + `origin/*`),
-checks each one's WI history, and genuinely attempts the cherry-pick to test
-whether the fix applies. In **PR mode** (the live GitHub path) `verify_propagation.sh`
-is also fully dynamic: it rediscovers the real branches and recomputes
-eligibility from git state — no branch names are hardcoded. The hardcoded lists
-in `verify_propagation.sh` apply **only to direct mode**, which runs against the
-synthetic fixture in `.generated-fixture/` and acts as a generator regression test.
+`propagate_patch.sh` **discovers branches dynamically** (local + `origin/*`),
+compares each name against the fix branch and checks its WI history, and
+genuinely attempts the cherry-pick to test whether the fix applies.
+`verify_propagation.sh` is equally dynamic: it rediscovers the real branches and
+recomputes eligibility from git state — **no branch names are hardcoded**.
+Locally there is no remote to push
+to, so both scripts run with `DRY_RUN=true` (genuine selection + cherry-pick, no
+push or PR); this is also how the CI integration gate works.
 
 ## Work item & fix commit
 
 - **Work item:** `[WI-440219]`
-- **Source branch:** `bugfix/payment-patch`
+- **Source branch:** `20-bugfix/payment-patch`
 - **Fix commit selection:** the newest commit on the source branch whose message contains `[WI-440219]` — that is the whole rule (no marker check)
 - **Affected file:** `src/payment/transaction_queue.py` (taken from the fix commit; cherry-picked where the file exists, added wholesale where it does not)
-- **Target branches (default `wi-history` mode):** any branch whose history mentions `WI-440219`, whether or not it already has the affected file
+- **Eligibility (default `wi-history` mode):** a branch's **name must sort lexicographically after `20-bugfix/payment-patch`** *and* its history must mention `WI-440219` (whether or not it already has the affected file)
+
+### How "lexicographically after the fix branch" is determined
+
+Every branch carries a two-digit numeric prefix (`05-`, `10-`, `15-`, `20-`, …)
+so branch names sort in a deterministic, controllable order. Eligibility is a
+pure **byte-wise name comparison** (`LC_ALL=C`): a branch qualifies only when
+its name sorts strictly after the fix branch's name. Because the prefixes are
+equal width and zero-padded, lexicographic order equals numeric order — a branch
+numbered higher than `20` is "after" the fix, a branch numbered `20` or lower is
+not. So the fix branch's own parent (`15-feature/payment-gateway`) and anything
+lower (e.g. `05-release/v1.0`) are excluded, regardless of commit dates.
 
 ## Local usage
 
 ```bash
-# Full pipeline into a throwaway fixture (safe — never touches live branches)
+# Full pipeline into a throwaway fixture (safe — dry-run, never pushes or opens PRs)
 ./scripts/run_pipeline.sh
 
-# Or run the steps against any repo dir individually
-./scripts/propagate_patch.sh .          # direct cherry-pick (mutates local branches)
+# Or run the steps against any repo dir individually (dry-run: no push / no PR)
+DRY_RUN=true ./scripts/propagate_patch.sh .
 ./scripts/verify_propagation.sh .
 ```
 
-## Propagation modes
+## How propagation works
 
-`propagate_patch.sh` and `verify_propagation.sh` share the same `PROPAGATION_MODE`:
+Propagation is **always via a pull request** — the fix is never cherry-picked
+directly onto a live branch. For each eligible branch `propagate_patch.sh`
+cherry-picks the fix onto `propagate/WI-440219/<branch>`, pushes it, and opens a
+PR into the original branch.
 
-| Mode | Behaviour |
-|------|-----------|
-| `direct` (default) | Cherry-pick the fix directly onto each eligible branch |
-| `pr` | Cherry-pick onto `propagate/WI-440219/<branch>`, push it, and open a PR into the original branch |
+Set `DRY_RUN=true` to exercise branch selection and the cherry-pick locally
+without pushing or opening anything. This is what `run_pipeline.sh` and the CI
+integration gate use, and it is the only way to run without a GitHub remote.
 
 ```bash
-PROPAGATION_MODE=pr ./scripts/propagate_patch.sh .
-PROPAGATION_MODE=pr ./scripts/verify_propagation.sh .
+# Against the live GitHub repo (requires gh / a token with repo + PR scope):
+./scripts/propagate_patch.sh .
+./scripts/verify_propagation.sh .
 ```
 
 A branch is **skipped / gets no PR** when any of these hold:
 
+- its **name sorts on or before the fix branch** (`20-bugfix/payment-patch`) —
+  including the fix branch's own parent (`15-feature/payment-gateway`); only
+  branches whose name sorts *after* the fix branch are eligible, or
 - it is a **protected integration branch** (`PROTECTED_BRANCHES`, default
   `main master`) — these never receive the fix, even if they qualify, or
 - its history has no `WI-440219` mention (not a target), or
 - it has the affected file but a **competing change** makes the cherry-pick
-  conflict (e.g. `feature/payment-hotfix`) — reported, not applied, or
-- it is listed in `BLOCKED_BRANCHES` (default `infra/kubernetes-config`) — an
-  explicit policy block that wins even if the branch otherwise qualifies.
+  conflict (e.g. `25-feature/payment-hotfix`) — reported, not applied, or
+- it is listed in `BLOCKED_BRANCHES` — an explicit policy block that wins even
+  if the branch otherwise qualifies. The default blocks both
+  `70-infra/kubernetes-config` and its pre-rename name `infra/kubernetes-config`
+  (the latter is a GitHub **protected** branch that survived the numeric-prefix
+  rename and still exists on `origin`; remove that branch and its protection
+  rule to drop the second entry).
 
-A WI branch that simply **lacks** the affected file (e.g. `release/v1.0`) is
-**not** skipped: the fix introduces the file (the full fixed version is added),
-so the branch still gets a PR.
+An eligible branch that simply **lacks** the affected file is **not** skipped:
+the fix introduces the file (the full fixed version is added), so it still gets
+a PR. (In the bundled fixture the only WI-but-no-file branch, `05-release/v1.0`,
+sorts before the fix branch, so it is excluded by the name-order rule instead.)
 
 ```bash
 # Block more branches (space- or comma-separated); remember to lower MIN_PRS.
-BLOCKED_BRANCHES="infra/kubernetes-config feature/ledger-audit" \
-MIN_PRS=3 PROPAGATION_MODE=pr ./scripts/propagate_patch.sh .
+BLOCKED_BRANCHES="70-infra/kubernetes-config 40-feature/ledger-audit" \
+MIN_PRS=2 ./scripts/propagate_patch.sh .
 ```
 
 ## GitHub Actions
@@ -89,7 +118,7 @@ The workflow runs on every push to `main` and has two jobs:
 
 | Job | Needs a secret? | What it does |
 |-----|-----------------|--------------|
-| **Full integration** | No | Generates a fresh fixture, cherry-picks the fix, verifies. Always the gate. |
+| **Full integration** | No | Generates a fresh fixture, runs the PR flow as a dry-run (selection + cherry-pick, no push), verifies. Always the gate. |
 | **Live repo PRs** | Yes (`PROPAGATION_TOKEN`) | Opens a real PR per eligible WI branch on this repo. |
 
 ### Why the PR job needs a token
@@ -129,30 +158,32 @@ set (Settings → Secrets and variables → Actions):
 | `SMTP_SECURITY` *(optional)* | `starttls` (default), `ssl`, or `none` |
 
 If the SMTP secrets are absent the email is skipped (the run-summary report still
-appears). Run it locally too: `PROPAGATION_MODE=pr ./scripts/notify_propagation.sh .`
+appears). Run it locally too: `./scripts/notify_propagation.sh .`
 
 ## Expected results
 
-| Branch | Direct mode | PR mode |
-|--------|-------------|---------|
-| `feature/payment-gateway` | Fix cherry-picked | PR opened |
-| `feature/ledger-audit` | Fix cherry-picked | PR opened |
-| `feature/compliance-reporting` | Fix cherry-picked | PR opened |
-| `feature/database-migration` | Fix cherry-picked | PR opened |
-| `release/v1.0` | Fix added (file created) | PR opened |
-| `feature/payment-hotfix` | Conflict (not applied) | No PR — conflict reported |
-| `infra/kubernetes-config` | Skipped (blocked) | No PR (blocked) |
-| `bugfix/payment-patch` | Source (skipped) | Source (skipped) |
-| All other branches | Skipped (no WI history) | Skipped |
+| Branch | Outcome |
+|--------|---------|
+| `40-feature/ledger-audit` | PR opened |
+| `50-feature/compliance-reporting` | PR opened |
+| `60-feature/database-migration` | PR opened |
+| `25-feature/payment-hotfix` | No PR — conflict reported |
+| `70-infra/kubernetes-config` | No PR (blocked) |
+| `15-feature/payment-gateway` | Skipped (name sorts before the fix branch) |
+| `05-release/v1.0` | Skipped (name sorts before the fix branch) |
+| `20-bugfix/payment-patch` | Source (skipped) |
+| `main` | Skipped (protected) |
+| All other branches | Skipped (no WI history) |
 
-PR mode opens **5 pull requests**. Two branches are intentional negative cases:
+The run opens **3 pull requests**. The interesting cases:
 
-- `infra/kubernetes-config` fully qualifies (WI history + affected file) but is in
-  `BLOCKED_BRANCHES`, so it is skipped — the block overrides eligibility.
-- `feature/payment-hotfix` has WI history and the affected file, but its competing
-  change makes the cherry-pick **conflict**. The conflict is **reported** (in the
-  summary, `results.tsv`, and the notification email) and the run **keeps going**
-  — a conflict never crashes the workflow.
-
-`release/v1.0` has WI history but no `transaction_queue.py`; rather than being
-skipped, the fix **adds** the file (the full fixed version), so it gets a PR.
+- `15-feature/payment-gateway` and `05-release/v1.0` mention the WI but their
+  names sort **on/before the fix branch** (`20-…`), so the name-order rule
+  excludes them — even though under a "WI history only" rule they would qualify.
+- `70-infra/kubernetes-config` qualifies (name sorts after, WI history, affected
+  file) but is in `BLOCKED_BRANCHES`, so it is skipped — the block overrides
+  eligibility.
+- `25-feature/payment-hotfix` qualifies, but its competing change makes the
+  cherry-pick **conflict**. The conflict is **reported** (in the summary,
+  `results.tsv`, and the notification email) and the run **keeps going** — a
+  conflict never crashes the workflow.
