@@ -1,0 +1,6 @@
+# Updated: 2026-06-15T16:56:47Z
+pipeline:
+  name: main-ci
+  triggers: [push, pull_request]
+  jobs: [lint, unit-test, integration-test]
+
