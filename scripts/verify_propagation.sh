@@ -30,6 +30,7 @@ BRANCH_SELECT_MODE="${BRANCH_SELECT_MODE:-wi-history}"
 PROPAGATION_MODE="${PROPAGATION_MODE:-direct}"
 PRS_FILE="${PRS_FILE:-${REPO_DIR}/.propagation-logs/pull-requests.txt}"
 SUMMARY_FILE="${SUMMARY_FILE:-${REPO_DIR}/.propagation-logs/propagation-summary.txt}"
+RESULTS_FILE="${RESULTS_FILE:-${REPO_DIR}/.propagation-logs/results.tsv}"
 
 # Same block policy as propagate_patch.sh (space- or comma-separated).
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-infra/kubernetes-config}"
@@ -44,9 +45,15 @@ EXPECTED_FIXED=(
   feature/compliance-reporting
   feature/database-migration
 )
+# WI branches that end up WITHOUT the definitive fix:
+#   release/v1.0            — lacks the affected file (cherry-pick fails)
+#   infra/kubernetes-config — qualifies, but blocked via BLOCKED_BRANCHES
+#   feature/payment-hotfix  — has the file, but its competing change makes the
+#                             cherry-pick conflict, so the fix is not applied
 EXPECTED_WI_BUT_NO_FIX=(
   release/v1.0
   infra/kubernetes-config
+  feature/payment-hotfix
 )
 EXPECTED_NO_WI=(
   main
@@ -128,6 +135,13 @@ pr_for_branch() {
   [[ -n "${url}" ]] && echo "${url}"
 }
 
+# Look up the recorded outcome status for a branch from results.tsv (the genuine
+# result of the propagation run, including real cherry-pick CONFLICTs).
+recorded_status() {
+  [[ -f "${RESULTS_FILE}" ]] || return 0
+  awk -F'\t' -v b="$1" '$2==b {print $1; exit}' "${RESULTS_FILE}"
+}
+
 echo "Propagation Verification"
 echo "========================"
 echo "Repository : ${REPO_DIR}"
@@ -173,8 +187,9 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
 
   eligible=0
   satisfied=0
+  conflicted=0
 
-  echo "--- Branches that MUST have a PR (selected and fix is applicable) ---"
+  echo "--- Branches selected for the fix (PR expected, unless it conflicts) ---"
   while IFS= read -r branch; do
     [[ "$(classify_branch "${branch}")" == "eligible" ]] || continue
     eligible=$((eligible + 1))
@@ -185,6 +200,9 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
     elif branch_has_fix "${branch}"; then
       check_pass "${branch} — fix already on branch (no new PR needed)"
       satisfied=$((satisfied + 1))
+    elif [[ "$(recorded_status "${branch}")" == "CONFLICT" ]]; then
+      check_pass "${branch} — fix conflicts; reported for manual resolution (no PR, non-fatal)"
+      conflicted=$((conflicted + 1))
     else
       check_fail "${branch} — eligible but no PR recorded and fix not present"
     fi
@@ -213,10 +231,10 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
   echo ""
   if [[ "${eligible}" -eq 0 ]]; then
     check_fail "No eligible branches found — nothing to propagate"
-  elif [[ "${satisfied}" -eq "${eligible}" ]]; then
-    check_pass "All ${eligible} eligible branch(es) have a PR or the fix (${satisfied}/${eligible})"
+  elif [[ $((satisfied + conflicted)) -eq "${eligible}" ]]; then
+    check_pass "All ${eligible} selected branch(es) accounted for: ${satisfied} with PR/fix, ${conflicted} conflict(s) reported"
   else
-    check_fail "Only ${satisfied}/${eligible} eligible branch(es) satisfied"
+    check_fail "Only $((satisfied + conflicted))/${eligible} selected branch(es) accounted for"
   fi
 
   echo ""
@@ -298,10 +316,10 @@ wi_branches=0
 for branch in $(git -C "${REPO_DIR}" branch --format='%(refname:short)'); do
   branch_mentions_wi "${branch}" && wi_branches=$((wi_branches + 1))
 done
-if [[ "${wi_branches}" -eq 7 ]]; then
-  check_pass "Seven branches mention ${WI_ID} in history (expected WI footprint)"
+if [[ "${wi_branches}" -eq 8 ]]; then
+  check_pass "Eight branches mention ${WI_ID} in history (expected WI footprint)"
 else
-  check_fail "Expected 7 WI branches, found ${wi_branches}"
+  check_fail "Expected 8 WI branches, found ${wi_branches}"
 fi
 
 echo ""
