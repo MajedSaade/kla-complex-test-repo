@@ -230,6 +230,17 @@ open_pull_request() {
   return 1
 }
 
+# Log why a cherry-pick failed: a WI branch missing the affected file (expected,
+# cannot apply) vs a genuine merge conflict. ${2} is an optional message suffix.
+log_apply_failure() {
+  local branch="$1" log_file="$2" conflict_note="${3:-}"
+  if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] && ! branch_has_file "${branch}"; then
+    log "FAIL  ${branch} — WI history match but missing '${AFFECTED_FILE}' (see ${log_file})"
+  else
+    log "FAIL  ${branch} — cherry-pick conflict${conflict_note} (see ${log_file})"
+  fi
+}
+
 apply_direct() {
   local branch="$1"
   local ref log_file
@@ -245,11 +256,7 @@ apply_direct() {
   fi
 
   git cherry-pick --abort >> "${log_file}" 2>&1 || true
-  if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] && ! branch_has_file "${branch}"; then
-    log "FAIL  ${branch} — WI history match but missing '${AFFECTED_FILE}' (see ${log_file})"
-  else
-    log "FAIL  ${branch} — cherry-pick conflict (see ${log_file})"
-  fi
+  log_apply_failure "${branch}" "${log_file}"
   return 1
 }
 
@@ -280,11 +287,7 @@ apply_via_pr() {
   if ! git -C "${worktree_dir}" cherry-pick "${SOURCE_COMMIT}" >> "${log_file}" 2>&1; then
     git -C "${worktree_dir}" cherry-pick --abort >> "${log_file}" 2>&1 || true
     git worktree remove "${worktree_dir}" --force >> "${log_file}" 2>&1 || rm -rf "${worktree_dir}"
-    if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] && ! branch_has_file "${branch}"; then
-      log "FAIL  ${branch} — WI history match but missing '${AFFECTED_FILE}' (see ${log_file})"
-    else
-      log "FAIL  ${branch} — cherry-pick conflict, no PR created (see ${log_file})"
-    fi
+    log_apply_failure "${branch}" "${log_file}" ", no PR created"
     return 1
   fi
 
