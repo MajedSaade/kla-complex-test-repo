@@ -1,5 +1,14 @@
 # Ephemeral CI/local fixture builds
 .generated-fixture/
+.generated-fixture-*/
+
+# Local default-target fixture (generate_complex_repo.sh with no args)
+/complex-test-repo/
+
+# Local test / leak-debugging scratch repos (often contain nested .git)
+.leak-test/
+.git-dir-leak-test/
+nested-init-test/
 
 # Propagation run logs (local runs at repo root)
 .propagation-logs/
