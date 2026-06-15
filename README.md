@@ -12,8 +12,19 @@ directly (cherry-pick) or by opening a pull request.
 | `generate_complex_repo.sh` | Builds the 14-branch fixture from scratch |
 | `scripts/propagate_patch.sh` | Finds the fix and applies it (direct or PR mode) |
 | `scripts/verify_propagation.sh` | Asserts the expected outcome (direct or PR mode) |
+| `scripts/notify_propagation.sh` | Emails / summarizes the propagation outcome |
 | `scripts/run_pipeline.sh` | Local end-to-end run: generate → propagate → verify |
 | `.github/workflows/patch-propagation.yml` | CI: integration test + live PR opening |
+
+### Live vs. fixture, and the "no hardcoding" guarantee
+
+`propagate_patch.sh` always **discovers branches dynamically** (local + `origin/*`),
+checks each one's WI history, and genuinely attempts the cherry-pick to test
+whether the fix applies. In **PR mode** (the live GitHub path) `verify_propagation.sh`
+is also fully dynamic: it rediscovers the real branches and recomputes
+eligibility from git state — no branch names are hardcoded. The hardcoded lists
+in `verify_propagation.sh` apply **only to direct mode**, which runs against the
+synthetic fixture in `.generated-fixture/` and acts as a generator regression test.
 
 ## Work item & fix commit
 
@@ -88,6 +99,26 @@ If the secret is absent the **Live repo PRs** job is **skipped with a notice**
 instead of failing — so CI stays green either way.
 
 View open PRs: https://github.com/MajedSaade/kla-complex-test-repo/pulls
+
+### Email notification
+
+After the live PR run, `scripts/notify_propagation.sh` builds a report grouped into
+**PRs opened** (and onto which branches), **skipped** (with reasons), and
+**no action / could not apply**. The report is always written to the GitHub
+Actions run summary. It is additionally emailed when these repository secrets are
+set (Settings → Secrets and variables → Actions):
+
+| Secret | Meaning |
+|--------|---------|
+| `NOTIFY_EMAIL_TO` | recipient address(es), comma-separated |
+| `NOTIFY_EMAIL_FROM` | sender address |
+| `SMTP_SERVER` | SMTP host (e.g. `smtp.gmail.com`) |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | SMTP login + password/app-password |
+| `SMTP_PORT` *(optional)* | default `587` |
+| `SMTP_SECURITY` *(optional)* | `starttls` (default), `ssl`, or `none` |
+
+If the SMTP secrets are absent the email is skipped (the run-summary report still
+appears). Run it locally too: `PROPAGATION_MODE=pr ./scripts/notify_propagation.sh .`
 
 ## Expected results
 
