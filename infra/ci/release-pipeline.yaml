@@ -1,0 +1,6 @@
+# Updated: 2026-06-15T16:56:47Z
+pipeline:
+  name: release-v1.0
+  stages: [build, test, package]
+  artifact_registry: prod-ecr
+
