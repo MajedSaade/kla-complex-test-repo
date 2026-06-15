@@ -75,7 +75,7 @@ is git-ignored. It is safe to delete at any time — the scripts recreate it.
 | **Source branch** | Branch that contains the *definitive* fix | `bugfix/payment-patch` |
 | **Affected file** | The file the fix changes | `src/payment/transaction_queue.py` |
 | **Fix marker** | Exact line that proves the definitive fix is present | `threading.RLock()  # WI-440219: definitive thread-safe fix` |
-| **Definitive fix commit** | Newest commit on the source branch that mentions the WI **and** contains the fix marker | selected at runtime |
+| **Fix commit** | Newest commit on the source branch that mentions the WI in its message | selected at runtime |
 | **Target / eligible branch** | A branch that *should* receive the fix | computed dynamically |
 | **Propagation mode** | How the fix is applied: `direct` (cherry-pick) or `pr` (open a PR) | `direct` |
 | **Branch select mode** | How targets are chosen: `wi-history` or `affected-file` | `wi-history` |
@@ -144,12 +144,12 @@ They exist as "noise" that must be correctly ignored.)*
 
 The whole test hinges on what each branch's copy of the affected file looks like:
 
-| State | Lock line | Branches | Cherry-pick result |
+| State | Lock line | Branches | Propagation result |
 |-------|-----------|----------|--------------------|
-| **Pre-fix** | `threading.Lock()  # ... partial lock — race remains` | `feature/payment-gateway`, `feature/ledger-audit`, `feature/compliance-reporting`, `feature/database-migration`, `infra/kubernetes-config` | applies cleanly ✅ |
+| **Pre-fix** | `threading.Lock()  # ... partial lock — race remains` | `feature/payment-gateway`, `feature/ledger-audit`, `feature/compliance-reporting`, `feature/database-migration`, `infra/kubernetes-config` | cherry-pick applies cleanly ✅ |
 | **Definitive fix** | `threading.RLock()  # ... definitive thread-safe fix` | `bugfix/payment-patch` (source) | already fixed |
-| **Competing** | local `enqueue` workaround that diverges | `feature/payment-hotfix` | conflict ⚠️ |
-| **Absent** | file does not exist | `release/v1.0` + all no-WI branches | cannot apply ❌ |
+| **Competing** | local `enqueue` workaround that diverges | `feature/payment-hotfix` | cherry-pick conflict ⚠️ |
+| **Absent** | file does not exist | `release/v1.0` + all no-WI branches | file added with the fix ➕ |
 
 ### 4.3 Why each "interesting" branch exists
 
@@ -162,11 +162,13 @@ The whole test hinges on what each branch's copy of the affected file looks like
 | `feature/database-migration` | ✅ | ✅ pre-fix | Happy path — gets the fix |
 | `feature/payment-hotfix` | ✅ | ✅ competing | **Conflict** case — reported, non-fatal |
 | `infra/kubernetes-config` | ✅ | ✅ pre-fix | **Policy block** case — skipped on purpose |
-| `release/v1.0` | ✅ | ❌ | **WI but no file** — cannot apply |
+| `release/v1.0` | ✅ | ❌ | **WI but no file** — the fix adds the file |
 | 7 other branches | ❌ | ❌ | **Noise** — must be ignored |
 
 This gives a known-good fixture: **8 branches mention the WI**, **7 carry the
-file**, and exactly **4 are cleanly eligible**.
+file**, and **5 receive the fix** (4 via clean cherry-pick + `release/v1.0` via
+file-add), while `feature/payment-hotfix` conflicts and `infra/kubernetes-config`
+is blocked.
 
 ### 4.4 Functions inside `generate_complex_repo.sh`
 
@@ -213,15 +215,17 @@ Everything is overridable via environment variables (with sensible defaults):
 flowchart TD
     A[Resolve SOURCE_BRANCH ref<br/>local or origin/*] --> B["git log --grep=WI_ID -1<br/>newest WI commit"]
     B --> C{commit found?}
-    C -- no --> X[Error: no WI commit] 
-    C -- yes --> D["git show commit:AFFECTED_FILE<br/>grep for FIX_MARKER"]
-    D --> E{marker present?}
-    E -- no --> Y[Error: not the definitive fix]
+    C -- no --> X[Error: no WI commit]
+    C -- yes --> D["git cat-file -e commit:AFFECTED_FILE<br/>does the commit carry the file?"]
+    D --> E{file present?}
+    E -- no --> Y[Error: fix commit lacks the file]
     E -- yes --> F[SOURCE_COMMIT is locked in]
 ```
 
-This double check (WI tag **and** fix marker) is why the fix is called
-*definitive* — it is not fooled by an arbitrary WI-tagged commit.
+The selection rule is simply **"the newest commit on the source branch whose
+message mentions the WI."** There is no marker check — the latest WI-tagged
+commit *is* the fix. The only extra requirement is that this commit actually
+contains the affected file, because its content is what gets propagated.
 
 ### 5.3 Eligibility: should a branch get the fix?
 
@@ -241,9 +245,9 @@ flowchart TD
     HF -- yes --> SK4[SKIP: fix already present]
     HF -- no --> SEL{selected by mode?<br/>wi-history: WI in history<br/>affected-file: file present}
     SEL -- no --> SK5[SKIP: not a target]
-    SEL -- yes --> EXP{WI history but<br/>file missing?}
-    EXP -- yes --> F1[FAIL: cannot apply]
-    EXP -- no --> APPLY[[apply: direct or PR]]
+    SEL -- yes --> HASF{branch has<br/>the file?}
+    HASF -- yes --> CP[[cherry-pick the fix<br/>competing change → CONFLICT]]
+    HASF -- no --> ADD[[add the file with<br/>the fixed content]]
 ```
 
 Helper predicates that drive this (all small one-liners near the middle):
@@ -256,13 +260,17 @@ Helper predicates that drive this (all small one-liners near the middle):
 | `is_blocked` | branch is in `BLOCKED_BRANCHES` |
 | `is_propagation_branch` | branch name starts with `propagate/` |
 | `should_target_branch` | combines all of the above for the chosen select mode |
-| `is_expected_wi_failure` | WI in history but file missing (a *known* non-applicable case) |
+| `add_fixed_file` | writes the file's full fixed content (from the fix commit) and commits it — used when the branch lacks the file |
 
 ### 5.4 Applying the fix — two modes
 
-**Direct mode (`apply_direct`)** — checkout the branch, `git cherry-pick` the
-fix commit. On success it logs `APPLY`; on failure it aborts the cherry-pick and
-calls `log_apply_failure` (the shared helper) to report *why*.
+**Direct mode (`apply_direct`)** — checkout the branch, then either:
+- if the branch **has** the file → `git cherry-pick` the fix (a competing change
+  makes this conflict, logged as `FAIL`/`CONFLICT`), or
+- if the branch **lacks** the file → `add_fixed_file` writes the full fixed
+  content and commits it (logged as `ADD`).
+
+On success it logs `APPLY`/`ADD`; on cherry-pick conflict it aborts and reports.
 
 **PR mode (`apply_via_pr`)** — never touches the real branch. Instead:
 
@@ -272,16 +280,19 @@ sequenceDiagram
     participant G as git
     participant H as GitHub (gh / API)
     P->>G: worktree add -B propagate/WI/<branch> (from origin/<branch>)
-    P->>G: cherry-pick SOURCE_COMMIT (in the worktree)
-    alt cherry-pick conflicts
-        P->>G: cherry-pick --abort, remove worktree
-        P-->>P: log CONFLICT (non-fatal), continue
-    else clean
-        P->>G: push -u origin propagate/WI/<branch>
-        P->>H: open_pull_request(base=<branch>, head=propagate/WI/<branch>)
-        H-->>P: PR url (or "already exists")
-        P->>G: remove worktree
+    alt branch has the file
+        P->>G: cherry-pick SOURCE_COMMIT (in the worktree)
+        alt cherry-pick conflicts
+            P->>G: cherry-pick --abort, remove worktree
+            P-->>P: log CONFLICT (non-fatal), continue
+        end
+    else branch lacks the file
+        P->>G: write fixed file content + commit (add_fixed_file)
     end
+    P->>G: push -u origin propagate/WI/<branch>
+    P->>H: open_pull_request(base=<branch>, head=propagate/WI/<branch>)
+    H-->>P: PR url (or "already exists")
+    P->>G: remove worktree
 ```
 
 Supporting functions for PR mode:
@@ -302,13 +313,13 @@ Each branch's result is recorded to `results.tsv` with one of these statuses:
 `APPLIED` · `PR_OPENED` · `PR_EXISTING` · `SKIPPED` · `CONFLICT` · `FAILED`
 
 `classify_failure` decides between a **conflict** (branch has the file but the
-cherry-pick clashed — non-fatal, needs a human), an **expected failure** (WI but
-no file — non-fatal), and an **unexpected failure** (anything else — fatal).
+cherry-pick clashed — non-fatal, needs a human) and an **unexpected failure**
+(anything else — fatal). A branch missing the file no longer fails: it gets the
+file added instead.
 
 The script's exit code policy:
 
-- Conflicts and expected/missing-file failures are **reported but never fail**
-  the run.
+- Conflicts are **reported but never fail** the run.
 - In PR mode, fewer than `MIN_PRS` pull requests **is** a failure.
 - Any *unexpected* failure **is** a failure.
 
@@ -329,17 +340,19 @@ flowchart TD
 ```
 
 - **PR mode is fully dynamic** — it re-derives eligibility from live Git state
-  with `classify_branch` (`eligible | blocked | source | cannot-apply |
-  skip-no-wi | …`), then asserts: every eligible branch has a PR (or already has
-  the fix, or is a reported conflict), and every other branch has *no* PR. **No
-  branch names are hardcoded.** It reads PR urls from `pull-requests.txt` /
+  with `classify_branch` (`eligible | blocked | source | skip-no-wi | …`), then
+  asserts: every eligible branch has a PR (or already has the fix, or is a
+  reported conflict), and every other branch has *no* PR. **No branch names are
+  hardcoded.** It reads PR urls from `pull-requests.txt` /
   `propagation-summary.txt` and real conflict status from `results.tsv`.
 
 - **Direct mode is a fixture regression test** — it checks the fix is present on
-  the four `EXPECTED_FIXED` branches, absent on the `EXPECTED_WI_BUT_NO_FIX`
-  branches, untouched on the `EXPECTED_NO_WI` branches, and finishes with a
-  "noise check" (≥5 definitive-fix commits exist, exactly 8 branches mention the
-  WI). These hardcoded lists describe the *generator's* known output only.
+  the `EXPECTED_FIXED` branches **and** the `EXPECTED_WI_FILE_ADDED` branch
+  (`release/v1.0`, which gets the file added), absent on the
+  `EXPECTED_WI_BUT_NO_FIX` branches (blocked / conflicting), untouched on the
+  `EXPECTED_NO_WI` branches, and finishes with a "noise check" (≥5 definitive-fix
+  commits exist, exactly 8 branches mention the WI). These hardcoded lists
+  describe the *generator's* known output only.
 
 Helper functions mirror `propagate_patch.sh` (`branch_ref`, `branch_has_file`,
 `branch_has_fix`, `branch_mentions_wi`, `is_blocked`, `list_branches`) plus
@@ -451,11 +464,11 @@ sequenceDiagram
 | `WI_ID` | all | `WI-440219` | Work item ID |
 | `SOURCE_BRANCH` | propagate, verify | `bugfix/payment-patch` | Branch holding the fix |
 | `AFFECTED_FILE` | propagate, verify | `src/payment/transaction_queue.py` | File the fix changes |
-| `FIX_MARKER` | propagate, verify | `threading.RLock()  # WI-440219: definitive thread-safe fix` | Proof line |
+| `FIX_MARKER` | propagate, verify | `threading.RLock()  # WI-440219: definitive thread-safe fix` | Line used to detect a branch that already has the fix |
 | `BRANCH_SELECT_MODE` | propagate, verify | `wi-history` | `wi-history` or `affected-file` |
 | `PROPAGATION_MODE` | propagate, verify | `direct` | `direct` or `pr` |
 | `BLOCKED_BRANCHES` | propagate, verify | `infra/kubernetes-config` | Branches to skip even if eligible |
-| `MIN_PRS` | propagate | `4` | PR-mode minimum to pass |
+| `MIN_PRS` | propagate | `5` | PR-mode minimum to pass |
 | `DRY_RUN` | propagate | `false` | Don't push/open PRs |
 | `NOTIFY_EMAIL_TO/FROM`, `SMTP_*` | notify | — | Email delivery (optional) |
 
@@ -469,15 +482,15 @@ sequenceDiagram
 | `feature/ledger-audit` | fix cherry-picked | PR opened |
 | `feature/compliance-reporting` | fix cherry-picked | PR opened |
 | `feature/database-migration` | fix cherry-picked | PR opened |
+| `release/v1.0` | file added with fix | PR opened |
 | `feature/payment-hotfix` | conflict (reported) | no PR — conflict reported |
 | `infra/kubernetes-config` | skipped (blocked) | no PR (blocked) |
 | `bugfix/payment-patch` | source (skipped) | source (skipped) |
-| `release/v1.0` | fail (no file) | no PR |
 | 7 other branches | skipped (no WI) | skipped |
 
-Net result: **4 clean applications / 4 PRs**, with two intentional negative
-cases (`payment-hotfix` conflict, `infra/kubernetes-config` block) and one
-not-applicable case (`release/v1.0`).
+Net result: **5 applications / 5 PRs** (including `release/v1.0`, which gets the
+file added), with two intentional negative cases (`payment-hotfix` conflict,
+`infra/kubernetes-config` block).
 
 ---
 

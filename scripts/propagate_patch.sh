@@ -34,8 +34,9 @@ DRY_RUN="${DRY_RUN:-false}"
 # Branches to skip even when they qualify (space- or comma-separated).
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-infra/kubernetes-config}"
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
-# Minimum PRs required for PR mode to succeed (eligible branches minus blocked).
-MIN_PRS="${MIN_PRS:-4}"
+# Minimum PRs required for PR mode to succeed (WI branches that can receive the
+# fix: cleanly cherry-picked or file-added, minus blocked/conflicting ones).
+MIN_PRS="${MIN_PRS:-5}"
 
 LOG_DIR="${LOG_DIR:-${REPO_DIR}/.propagation-logs}"
 mkdir -p "${LOG_DIR}"
@@ -230,15 +231,16 @@ open_pull_request() {
   return 1
 }
 
-# Log why a cherry-pick failed: a WI branch missing the affected file (expected,
-# cannot apply) vs a genuine merge conflict. ${2} is an optional message suffix.
-log_apply_failure() {
-  local branch="$1" log_file="$2" conflict_note="${3:-}"
-  if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] && ! branch_has_file "${branch}"; then
-    log "FAIL  ${branch} — WI history match but missing '${AFFECTED_FILE}' (see ${log_file})"
-  else
-    log "FAIL  ${branch} — cherry-pick conflict${conflict_note} (see ${log_file})"
-  fi
+# Write the fixed version of the affected file (its full content at the fix
+# commit) into <worktree>, then stage and commit it. Used to ADD the file to a
+# branch that does not have it yet, so the fix still lands via a normal commit.
+add_fixed_file() {
+  local worktree="${1:-.}"
+  local dest="${worktree%/}/${AFFECTED_FILE}"
+  mkdir -p "$(dirname "${dest}")"
+  git show "${SOURCE_COMMIT}:${AFFECTED_FILE}" > "${dest}" || return 1
+  git -C "${worktree}" add "${AFFECTED_FILE}" || return 1
+  git -C "${worktree}" commit -m "Propagate ${WI_TAG}: add ${AFFECTED_FILE} with fix (from ${SOURCE_COMMIT:0:7})"
 }
 
 apply_direct() {
@@ -247,16 +249,29 @@ apply_direct() {
   ref="$(branch_ref "${branch}")"
   log_file="${LOG_DIR}/cherry-pick-${branch//\//_}.log"
 
-  if git checkout -B "${branch}" "${ref}" >> "${log_file}" 2>&1 \
-    && git cherry-pick "${SOURCE_COMMIT}" >> "${log_file}" 2>&1; then
-    local new_sha
-    new_sha="$(git rev-parse --short HEAD)"
-    log "APPLY ${branch} — cherry-picked ${SOURCE_COMMIT:0:7} → ${new_sha}"
+  if ! git checkout -B "${branch}" "${ref}" >> "${log_file}" 2>&1; then
+    log "FAIL  ${branch} — unable to checkout ${ref} (see ${log_file})"
+    return 1
+  fi
+
+  # File missing — add it with the fixed content (no diff to conflict with).
+  if [[ ! -f "${AFFECTED_FILE}" ]]; then
+    if add_fixed_file "." >> "${log_file}" 2>&1; then
+      log "ADD   ${branch} — added ${AFFECTED_FILE} with fix → $(git rev-parse --short HEAD)"
+      return 0
+    fi
+    log "FAIL  ${branch} — unable to add ${AFFECTED_FILE} (see ${log_file})"
+    return 1
+  fi
+
+  # File present — replay the fix; a competing change makes this conflict.
+  if git cherry-pick "${SOURCE_COMMIT}" >> "${log_file}" 2>&1; then
+    log "APPLY ${branch} — cherry-picked ${SOURCE_COMMIT:0:7} → $(git rev-parse --short HEAD)"
     return 0
   fi
 
   git cherry-pick --abort >> "${log_file}" 2>&1 || true
-  log_apply_failure "${branch}" "${log_file}"
+  log "FAIL  ${branch} — cherry-pick conflict (see ${log_file})"
   return 1
 }
 
@@ -284,11 +299,21 @@ apply_via_pr() {
     return 1
   fi
 
-  if ! git -C "${worktree_dir}" cherry-pick "${SOURCE_COMMIT}" >> "${log_file}" 2>&1; then
-    git -C "${worktree_dir}" cherry-pick --abort >> "${log_file}" 2>&1 || true
-    git worktree remove "${worktree_dir}" --force >> "${log_file}" 2>&1 || rm -rf "${worktree_dir}"
-    log_apply_failure "${branch}" "${log_file}" ", no PR created"
-    return 1
+  if git -C "${worktree_dir}" cat-file -e "HEAD:${AFFECTED_FILE}" 2>/dev/null; then
+    # File present — replay the fix; a competing change makes this conflict.
+    if ! git -C "${worktree_dir}" cherry-pick "${SOURCE_COMMIT}" >> "${log_file}" 2>&1; then
+      git -C "${worktree_dir}" cherry-pick --abort >> "${log_file}" 2>&1 || true
+      git worktree remove "${worktree_dir}" --force >> "${log_file}" 2>&1 || rm -rf "${worktree_dir}"
+      log "FAIL  ${branch} — cherry-pick conflict, no PR created (see ${log_file})"
+      return 1
+    fi
+  else
+    # File missing — add it with the fixed content so the PR introduces the fix.
+    if ! add_fixed_file "${worktree_dir}" >> "${log_file}" 2>&1; then
+      git worktree remove "${worktree_dir}" --force >> "${log_file}" 2>&1 || rm -rf "${worktree_dir}"
+      log "FAIL  ${branch} — unable to add ${AFFECTED_FILE}, no PR created (see ${log_file})"
+      return 1
+    fi
   fi
 
   if [[ "${DRY_RUN}" == "true" ]]; then
@@ -316,9 +341,14 @@ apply_via_pr() {
 }
 
 # ---------------------------------------------------------------------------
-# Locate the definitive fix commit: the newest commit on the source branch
-# whose message mentions the work item, verified to carry the fix marker in
-# the affected file (not merely the branch tip or any arbitrary substring).
+# Locate the fix commit: the newest commit on the source branch whose message
+# mentions the work item. That is the whole selection rule — we do not require
+# any particular marker line, because the fix is identified purely by being the
+# latest WI-tagged commit on the source branch.
+#
+# We do require that this commit actually contains the affected file, since its
+# fixed content is what we propagate (cherry-picked where the file exists, or
+# added wholesale where it does not).
 # ---------------------------------------------------------------------------
 
 SOURCE_REF="$(branch_ref "${SOURCE_BRANCH}")"
@@ -332,8 +362,8 @@ if [[ -z "${SOURCE_COMMIT}" ]]; then
   exit 1
 fi
 
-if ! git show "${SOURCE_COMMIT}:${AFFECTED_FILE}" 2>/dev/null | grep -Fq "${FIX_MARKER}"; then
-  echo "Error: newest '${WI_TAG}' commit on '${SOURCE_BRANCH}' (${SOURCE_COMMIT:0:7}) does not contain the definitive fix in '${AFFECTED_FILE}'" >&2
+if ! git cat-file -e "${SOURCE_COMMIT}:${AFFECTED_FILE}" 2>/dev/null; then
+  echo "Error: fix commit ${SOURCE_COMMIT:0:7} on '${SOURCE_BRANCH}' does not contain '${AFFECTED_FILE}'" >&2
   echo "       Message: $(git log -1 --format='%s' "${SOURCE_COMMIT}")" >&2
   exit 1
 fi
@@ -370,13 +400,6 @@ should_target_branch() {
   esac
 }
 
-is_expected_wi_failure() {
-  local branch="$1"
-  [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] \
-    && branch_mentions_wi "${branch}" \
-    && ! branch_has_file "${branch}"
-}
-
 GITHUB_REPO="$(github_repo_slug || true)"
 
 log "Patch Propagation Report"
@@ -388,7 +411,7 @@ log "Selection  : ${BRANCH_SELECT_MODE}"
 log "Mode       : ${PROPAGATION_MODE}"
 log "Fix commit : ${source_msg}"
 [[ "${source_msg}" != *"${FIX_MESSAGE_PATTERN}"* ]] \
-  && log "Note       : message does not contain '${FIX_MESSAGE_PATTERN}' (selected by ${WI_TAG} + fix marker)"
+  && log "Note       : message does not contain '${FIX_MESSAGE_PATTERN}' (selected as newest ${WI_TAG} commit)"
 [[ -n "${GITHUB_REPO}" ]] && log "GitHub     : ${GITHUB_REPO}"
 log ""
 
@@ -417,28 +440,23 @@ applied=0
 prs=0
 skipped=0
 failed=0
-expected_failed=0
 unexpected_failed=0
 conflicts=0
 
-# Classify a failed cherry-pick and record it. A branch that HAS the affected
-# file but fails is a genuine merge CONFLICT (non-fatal — needs manual
-# resolution). A WI branch missing the file is an expected failure. Anything
-# else is an unexpected failure (fatal).
+# Classify a failed application and record it. Because a branch missing the file
+# now gets the file ADDED (it cannot conflict), a branch that still fails while
+# HAVING the file is a genuine merge CONFLICT (non-fatal — needs manual
+# resolution). Anything else is an unexpected failure (fatal).
 classify_failure() {
   local branch="$1"
-  if is_expected_wi_failure "${branch}"; then
-    failed=$((failed + 1))
-    expected_failed=$((expected_failed + 1))
-    record FAILED "${branch}" "WI history match but missing '${AFFECTED_FILE}' (cannot apply fix)"
-  elif branch_has_file "${branch}"; then
+  if branch_has_file "${branch}"; then
     conflicts=$((conflicts + 1))
     log "CONFLICT ${branch} — fix does not apply cleanly; manual resolution needed"
     record CONFLICT "${branch}" "cherry-pick conflict; manual resolution needed"
   else
     failed=$((failed + 1))
     unexpected_failed=$((unexpected_failed + 1))
-    record FAILED "${branch}" "unexpected failure (cherry-pick/push/PR)"
+    record FAILED "${branch}" "unexpected failure (add/push/PR)"
   fi
 }
 
@@ -490,14 +508,6 @@ while IFS= read -r branch; do
     continue
   fi
 
-  if [[ "${PROPAGATION_MODE}" == "pr" ]] && is_expected_wi_failure "${branch}"; then
-    log "FAIL  ${branch} — WI history match but missing '${AFFECTED_FILE}'"
-    record FAILED "${branch}" "WI history match but missing '${AFFECTED_FILE}' (cannot apply fix)"
-    failed=$((failed + 1))
-    expected_failed=$((expected_failed + 1))
-    continue
-  fi
-
   if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
     if apply_via_pr "${branch}" "${GITHUB_REPO}"; then
       prs=$((prs + 1))
@@ -508,7 +518,7 @@ while IFS= read -r branch; do
     fi
   elif apply_direct "${branch}"; then
     applied=$((applied + 1))
-    record APPLIED "${branch}" "fix cherry-picked onto branch"
+    record APPLIED "${branch}" "fix applied onto branch"
   else
     classify_failure "${branch}"
   fi
@@ -526,14 +536,11 @@ fi
 log "Full log: ${SUMMARY_FILE}"
 log "Results  : ${RESULTS_FILE}"
 
-# Conflicts and missing-file failures are expected, non-fatal outcomes: they are
-# reported (and emailed) but never stop the run. Only truly unexpected failures
-# (or too few PRs in PR mode) fail the job.
+# Conflicts are expected, non-fatal outcomes: they are reported (and emailed)
+# but never stop the run. Only truly unexpected failures (or too few PRs in PR
+# mode) fail the job.
 if [[ "${conflicts}" -gt 0 ]]; then
   log "Note: ${conflicts} branch(es) need manual conflict resolution (no auto-propagation)."
-fi
-if [[ "${expected_failed}" -gt 0 ]]; then
-  log "Note: ${expected_failed} WI branch(es) without '${AFFECTED_FILE}' (fix not applicable)."
 fi
 
 if [[ "${PROPAGATION_MODE}" == "pr" && "${prs}" -lt "${MIN_PRS}" ]]; then
