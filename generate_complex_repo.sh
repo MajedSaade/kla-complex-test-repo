@@ -13,17 +13,46 @@ set -euo pipefail
 TARGET_DIR="${1:-./complex-test-repo}"
 WI="[WI-440219]"
 
+if [[ "${TARGET_DIR}" != /* ]]; then
+  TARGET_DIR="$(pwd)/${TARGET_DIR#./}"
+fi
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+verify_nested_git_dir() {
+  local git_dir expected
+  git_dir="$(git rev-parse --absolute-git-dir)"
+  expected="${TARGET_DIR}/.git"
+  if [[ "${git_dir}" != "${expected}" ]]; then
+    echo "Error: fixture git dir is '${git_dir}', expected '${expected}'." >&2
+    echo "If running inside another checkout, unset GIT_DIR/GIT_WORK_TREE first." >&2
+    exit 1
+  fi
+}
+
 init_repo() {
-  rm -rf "${TARGET_DIR}"
+  if [[ -e "${TARGET_DIR}" ]]; then
+    chmod -R u+w "${TARGET_DIR}" 2>/dev/null || true
+    rm -rf "${TARGET_DIR}"
+  fi
+  if [[ -e "${TARGET_DIR}" ]]; then
+    echo "Error: unable to remove existing ${TARGET_DIR}" >&2
+    exit 1
+  fi
   mkdir -p "${TARGET_DIR}"
   cd "${TARGET_DIR}"
+
+  # Avoid writing fixture history into the parent checkout when CI sets GIT_*.
+  unset GIT_DIR GIT_WORK_TREE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR 2>/dev/null || true
+
   git init -b main
+  verify_nested_git_dir
   git config user.email "devops@enterprise.local"
   git config user.name "Enterprise DevOps Bot"
+  git config gc.auto 0
+  git config maintenance.auto false
 
   # Seed directory structure
   mkdir -p src/auth src/payment src/ui src/analytics src/ledger \
@@ -58,9 +87,24 @@ new_branch() {
   local name="$1"
   local parent="${2:-}"
   if [[ -n "${parent}" ]]; then
-    git checkout "${parent}" 2>/dev/null || git switch "${parent}"
+    git switch "${parent}"
   fi
-  git checkout -b "${name}" 2>/dev/null || git switch -c "${name}"
+  git switch -c "${name}"
+}
+
+list_wi_commits() {
+  local branch
+  while IFS= read -r branch; do
+    git log "${branch}" --oneline --grep="WI-440219" 2>/dev/null || true
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads/) | sort -u
+}
+
+print_branch_graph() {
+  local branches=()
+  while IFS= read -r branch; do
+    branches+=("${branch}")
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads/)
+  git log --oneline --graph --decorate "${branches[@]}"
 }
 
 section() {
@@ -823,16 +867,22 @@ commit_change \
 # ---------------------------------------------------------------------------
 
 section "Repository generation complete"
+verify_nested_git_dir
+if ! git fsck --no-progress 2>/dev/null; then
+  echo "Error: generated fixture repository failed fsck" >&2
+  exit 1
+fi
+
 echo "Location: $(pwd)"
 echo
 echo "Branches created:"
-git branch -a | sed 's/^/  /'
+git branch | sed 's/^/  /'
 echo
 echo "Commits mentioning ${WI}:"
-git log --all --oneline --grep="WI-440219" | sed 's/^/  /'
+list_wi_commits | sed 's/^/  /'
 echo
 echo "Target propagation commit (bugfix/payment-patch):"
 git log bugfix/payment-patch --oneline -1 | sed 's/^/  /'
 echo
 echo "Full branch graph:"
-git log --oneline --graph --all
+print_branch_graph

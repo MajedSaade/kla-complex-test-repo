@@ -39,7 +39,9 @@ jobs:
         run: chmod +x generate_complex_repo.sh scripts/*.sh
 
       - name: Generate fresh fixture from scratch
-        run: ./generate_complex_repo.sh ./.generated-fixture
+        run: |
+          unset GIT_DIR GIT_WORK_TREE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR || true
+          ./generate_complex_repo.sh ./.generated-fixture
 
       - name: Propagate definitive fix (direct mode)
         env:
