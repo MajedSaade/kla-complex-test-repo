@@ -28,20 +28,6 @@ This project answers that question with plain Bash + Git. It has two halves:
 Everything is driven by one **work item**, `WI-440219`, and one **affected
 file**, `src/payment/transaction_queue.py`.
 
-```mermaid
-flowchart LR
-    A[generate_complex_repo.sh<br/>build the fake repo] --> B[propagate_patch.sh<br/>find &amp; apply the fix]
-    B --> C[verify_propagation.sh<br/>assert the outcome]
-    B --> D[notify_propagation.sh<br/>summarize / email]
-    R[run_pipeline.sh] -. orchestrates locally .-> A
-    R -. .-> B
-    R -. .-> C
-    W[.github/workflows/<br/>patch-propagation.yml] -. orchestrates in CI .-> A
-    W -. .-> B
-    W -. .-> C
-    W -. .-> D
-```
-
 ---
 
 ## 2. Repository layout
