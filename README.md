@@ -48,8 +48,18 @@ PROPAGATION_MODE=pr ./scripts/propagate_patch.sh .
 PROPAGATION_MODE=pr ./scripts/verify_propagation.sh .
 ```
 
-Branches with WI history but no affected file (e.g. `release/v1.0`) fail the
-cherry-pick on purpose, so **no PR is opened** for them.
+A branch is **skipped / gets no PR** when any of these hold:
+
+- its history has no `WI-440219` mention (not a target), or
+- it lacks the affected file, so the cherry-pick fails (e.g. `release/v1.0`), or
+- it is listed in `BLOCKED_BRANCHES` (default `infra/kubernetes-config`) — an
+  explicit policy block that wins even if the branch otherwise qualifies.
+
+```bash
+# Block more branches (space- or comma-separated); remember to lower MIN_PRS.
+BLOCKED_BRANCHES="infra/kubernetes-config feature/ledger-audit" \
+MIN_PRS=3 PROPAGATION_MODE=pr ./scripts/propagate_patch.sh .
+```
 
 ## GitHub Actions
 
@@ -87,9 +97,12 @@ View open PRs: https://github.com/MajedSaade/kla-complex-test-repo/pulls
 | `feature/ledger-audit` | Fix cherry-picked | PR opened |
 | `feature/compliance-reporting` | Fix cherry-picked | PR opened |
 | `feature/database-migration` | Fix cherry-picked | PR opened |
-| `infra/kubernetes-config` | Fix cherry-picked | PR opened |
+| `infra/kubernetes-config` | Skipped (blocked) | No PR (blocked) |
 | `bugfix/payment-patch` | Source (skipped) | Source (skipped) |
 | `release/v1.0` | Fail (no affected file) | No PR |
 | All other branches | Skipped (no WI history) | Skipped |
 
-PR mode opens **5 pull requests** (one per eligible branch above).
+PR mode opens **4 pull requests** (one per eligible branch above).
+`infra/kubernetes-config` fully qualifies (WI history + affected file) but is
+listed in `BLOCKED_BRANCHES`, so it is skipped — demonstrating that the block
+overrides eligibility.
