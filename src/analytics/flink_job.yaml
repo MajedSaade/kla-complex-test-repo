@@ -1,0 +1,6 @@
+# Updated: 2026-06-15T16:56:48Z
+job:
+  name: session-reconstruction
+  parallelism: 4
+  checkpoint_interval: 60s
+
