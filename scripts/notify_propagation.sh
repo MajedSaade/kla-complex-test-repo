@@ -125,10 +125,10 @@ with open(os.environ["NOTIFY_BODY_FILE"], "r", encoding="utf-8") as fh:
     msg.set_content(fh.read())
 
 host = os.environ["SMTP_SERVER"]
-port = int(os.environ.get("SMTP_PORT", "587"))
+port = int((os.environ.get("SMTP_PORT") or "587").strip())
 user = os.environ["SMTP_USERNAME"]
 password = os.environ["SMTP_PASSWORD"]
-security = os.environ.get("SMTP_SECURITY", "starttls").lower()
+security = (os.environ.get("SMTP_SECURITY") or "starttls").strip().lower()
 
 try:
     if security == "ssl":
