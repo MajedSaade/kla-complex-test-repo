@@ -130,6 +130,19 @@ jobs:
           PROPAGATION_MODE: pr
         run: ./scripts/verify_propagation.sh .
 
+      - name: Notify (email + run summary) of propagation outcome
+        if: always() && steps.token.outputs.enabled == 'true'
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+        run: ./scripts/notify_propagation.sh .
+
       - name: Stage PR propagation logs
         if: always() && steps.token.outputs.enabled == 'true'
         run: |

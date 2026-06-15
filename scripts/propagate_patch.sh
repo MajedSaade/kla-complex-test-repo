@@ -42,12 +42,21 @@ mkdir -p "${LOG_DIR}"
 SUMMARY_FILE="${LOG_DIR}/propagation-summary.txt"
 TARGETS_FILE="${LOG_DIR}/wi-target-branches.txt"
 PRS_FILE="${LOG_DIR}/pull-requests.txt"
+RESULTS_FILE="${LOG_DIR}/results.tsv"
 : > "${SUMMARY_FILE}"
 : > "${TARGETS_FILE}"
 : > "${PRS_FILE}"
+: > "${RESULTS_FILE}"
 
 log() {
   echo "$*" | tee -a "${SUMMARY_FILE}"
+}
+
+# Machine-readable per-branch outcome: <status> <branch> <reason> <url>.
+# Statuses: PR_OPENED, PR_EXISTING, APPLIED, SKIPPED, FAILED.
+# Consumed by verify_propagation.sh and notify_propagation.sh.
+record() {
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "${3:-}" "${4:-}" >> "${RESULTS_FILE}"
 }
 
 cd "${REPO_DIR}"
@@ -405,45 +414,52 @@ while IFS= read -r branch; do
 
   if [[ "${branch}" == "${SOURCE_BRANCH}" ]]; then
     log "SKIP  ${branch} — source branch (already contains fix)"
+    record SKIPPED "${branch}" "source branch (already contains fix)"
     skipped=$((skipped + 1))
     continue
   fi
 
   if is_blocked "${branch}"; then
     log "SKIP  ${branch} — blocked by policy (BLOCKED_BRANCHES)"
+    record SKIPPED "${branch}" "blocked by policy (BLOCKED_BRANCHES)"
     skipped=$((skipped + 1))
     continue
   fi
 
   if branch_has_fix "${branch}"; then
+    existing_pr=""
     if [[ "${PROPAGATION_MODE}" == "pr" ]] && command -v gh >/dev/null 2>&1 && [[ -n "${GITHUB_REPO:-}" ]]; then
       existing_pr="$(gh pr list --repo "${GITHUB_REPO}" --base "${branch}" --state open \
         --search "Propagate [${WI_ID}] in:title" --json url --jq '.[0].url' 2>/dev/null || true)"
-      if [[ -n "${existing_pr}" && "${existing_pr}" != "null" ]]; then
-        log "SKIP  ${branch} — fix on branch; existing PR ${existing_pr}"
-        echo "${branch}|${existing_pr}" >> "${PRS_FILE}"
-      else
-        log "SKIP  ${branch} — fix marker already present on branch"
-      fi
+    fi
+    if [[ -n "${existing_pr}" && "${existing_pr}" != "null" ]]; then
+      log "SKIP  ${branch} — fix on branch; existing PR ${existing_pr}"
+      echo "${branch}|${existing_pr}" >> "${PRS_FILE}"
+      record PR_EXISTING "${branch}" "fix already on branch; existing PR" "${existing_pr}"
     else
       log "SKIP  ${branch} — fix marker already present"
+      record SKIPPED "${branch}" "fix marker already present on branch"
     fi
     skipped=$((skipped + 1))
     continue
   fi
 
   if ! should_target_branch "${branch}"; then
+    reason="not selected by ${BRANCH_SELECT_MODE}"
     if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]] && ! branch_mentions_wi "${branch}"; then
-      log "SKIP  ${branch} — no ${WI_TAG} in branch commit history"
+      reason="no ${WI_TAG} in branch commit history"
     elif [[ "${BRANCH_SELECT_MODE}" == "affected-file" ]] && ! branch_has_file "${branch}"; then
-      log "SKIP  ${branch} — '${AFFECTED_FILE}' not present"
+      reason="'${AFFECTED_FILE}' not present"
     fi
+    log "SKIP  ${branch} — ${reason}"
+    record SKIPPED "${branch}" "${reason}"
     skipped=$((skipped + 1))
     continue
   fi
 
   if [[ "${PROPAGATION_MODE}" == "pr" ]] && is_expected_wi_failure "${branch}"; then
     log "FAIL  ${branch} — WI history match but missing '${AFFECTED_FILE}'"
+    record FAILED "${branch}" "WI history match but missing '${AFFECTED_FILE}' (cannot apply fix)"
     failed=$((failed + 1))
     expected_failed=$((expected_failed + 1))
     continue
@@ -452,22 +468,29 @@ while IFS= read -r branch; do
   if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
     if apply_via_pr "${branch}" "${GITHUB_REPO}"; then
       prs=$((prs + 1))
+      pr_url="$(grep -F "${branch}|" "${PRS_FILE}" 2>/dev/null | tail -1 | cut -d'|' -f2-)"
+      record PR_OPENED "${branch}" "pull request opened" "${pr_url}"
     else
       failed=$((failed + 1))
       if is_expected_wi_failure "${branch}"; then
         expected_failed=$((expected_failed + 1))
+        record FAILED "${branch}" "WI history match but missing '${AFFECTED_FILE}' (cannot apply fix)"
       else
         unexpected_failed=$((unexpected_failed + 1))
+        record FAILED "${branch}" "cherry-pick conflict, push, or PR creation failed"
       fi
     fi
   elif apply_direct "${branch}"; then
     applied=$((applied + 1))
+    record APPLIED "${branch}" "fix cherry-picked onto branch"
   else
     failed=$((failed + 1))
     if is_expected_wi_failure "${branch}"; then
       expected_failed=$((expected_failed + 1))
+      record FAILED "${branch}" "WI history match but missing '${AFFECTED_FILE}' (cannot apply fix)"
     else
       unexpected_failed=$((unexpected_failed + 1))
+      record FAILED "${branch}" "cherry-pick conflict"
     fi
   fi
 done < <(list_branches)
@@ -482,6 +505,7 @@ else
   log "Summary: ${applied} applied, ${skipped} skipped, ${failed} failed"
 fi
 log "Full log: ${SUMMARY_FILE}"
+log "Results  : ${RESULTS_FILE}"
 
 if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
   if [[ "${prs}" -lt "${MIN_PRS}" ]]; then
