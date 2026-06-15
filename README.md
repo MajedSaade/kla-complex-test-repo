@@ -15,6 +15,10 @@ directly (cherry-pick) or by opening a pull request.
 | `scripts/notify_propagation.sh` | Emails / summarizes the propagation outcome |
 | `scripts/run_pipeline.sh` | Local end-to-end run: generate → propagate → verify |
 | `.github/workflows/patch-propagation.yml` | CI: integration test + live PR opening |
+| `ARCHITECTURE.md` | Detailed walkthrough of how everything works (with diagrams) |
+
+> New here? Read **[ARCHITECTURE.md](ARCHITECTURE.md)** for a full, diagrammed
+> explanation of every file, function, and how the pieces connect.
 
 ### Live vs. fixture, and the "no hardcoding" guarantee
 
