@@ -23,7 +23,7 @@ REPO_DIR="$(cd "${REPO_DIR}" && pwd)"
 
 WI_ID="${WI_ID:-WI-440219}"
 WI_TAG="[${WI_ID}]"
-SOURCE_BRANCH="${SOURCE_BRANCH:-20-bugfix/payment-patch}"
+SOURCE_BRANCH="${SOURCE_BRANCH:-A14-bugfix/payment-patch}"
 FIX_MESSAGE_PATTERN="${FIX_MESSAGE_PATTERN:-Apply definitive thread-safe fix}"
 AFFECTED_FILE="${AFFECTED_FILE:-src/payment/transaction_queue.py}"
 FIX_MARKER="${FIX_MARKER:-threading.RLock()  # WI-440219: definitive thread-safe fix}"
@@ -32,12 +32,12 @@ PROPAGATION_MODE="${PROPAGATION_MODE:-direct}"
 DRY_RUN="${DRY_RUN:-false}"
 
 # Branches to skip even when they qualify (space- or comma-separated).
-# 70-infra/kubernetes-config is the policy-blocked branch. The unprefixed
+# G6-infra/kubernetes-config is the policy-blocked branch. The unprefixed
 # "infra/kubernetes-config" is its pre-rename name, still present on origin as a
-# protected branch that could not be deleted during the numeric-prefix rename;
+# protected branch that could not be deleted during the letter-prefix rename;
 # it is blocked too so the stale ref is never targeted (safe to drop once that
 # branch is removed).
-BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-70-infra/kubernetes-config infra/kubernetes-config}"
+BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-G6-infra/kubernetes-config infra/kubernetes-config}"
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
 # Integration branches that must NEVER receive a propagation PR/cherry-pick,
 # regardless of WI history (space- or comma-separated).
@@ -549,7 +549,7 @@ while IFS= read -r branch; do
   if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
     if apply_via_pr "${branch}" "${GITHUB_REPO}"; then
       prs=$((prs + 1))
-      pr_url="$(grep -F "${branch}|" "${PRS_FILE}" 2>/dev/null | tail -1 | cut -d'|' -f2-)"
+      pr_url="$(grep -F "${branch}|" "${PRS_FILE}" 2>/dev/null | tail -1 | cut -d'|' -f2- || true)"
       record PR_OPENED "${branch}" "pull request opened" "${pr_url}"
     else
       classify_failure "${branch}"

@@ -5,7 +5,7 @@ does, how the functions fit together, and how the pieces connect end to end.
 Diagrams are written in [Mermaid](https://mermaid.js.org/) and render on GitHub.
 
 > **TL;DR** — This repo is a *self-contained test harness* for **cross-branch
-> patch propagation**. One script **builds** a fake 15-branch enterprise repo,
+> patch propagation**. One script **builds** a fake 18-branch enterprise repo,
 > a second **finds a bug-fix commit and copies it** onto every branch that
 > should get it, a third **checks** the result, a fourth **reports/emails** it,
 > and a GitHub Actions workflow **runs the whole thing in CI**.
@@ -34,7 +34,7 @@ file**, `src/payment/transaction_queue.py`.
 
 ```
 complex-test-repo/
-├── generate_complex_repo.sh        # Builds the 15-branch fixture from scratch
+├── generate_complex_repo.sh        # Builds the 18-branch fixture from scratch
 ├── scripts/
 │   ├── propagate_patch.sh          # Finds the fix and applies it (direct or PR)
 │   ├── verify_propagation.sh       # Asserts the expected outcome
@@ -58,7 +58,7 @@ is git-ignored. It is safe to delete at any time — the scripts recreate it.
 | Term | Meaning | Default |
 |------|---------|---------|
 | **Work item (`WI_ID`)** | The ticket ID that tags related commits | `WI-440219` |
-| **Source branch** | Branch that contains the *definitive* fix | `20-bugfix/payment-patch` |
+| **Source branch** | Branch that contains the *definitive* fix | `A14-bugfix/payment-patch` |
 | **Affected file** | The file the fix changes | `src/payment/transaction_queue.py` |
 | **Fix marker** | Exact line that proves the definitive fix is present | `threading.RLock()  # WI-440219: definitive thread-safe fix` |
 | **Fix commit** | Newest commit on the source branch that mentions the WI in its message | selected at runtime |
@@ -75,7 +75,7 @@ branch (direct) or onto a throw-away branch that then becomes a Pull Request.
 ## 4. The fixture: what `generate_complex_repo.sh` builds
 
 This script throws away any existing target directory and builds a brand-new Git
-repo with **15 branches** designed to exercise every interesting case.
+repo with **18 branches** designed to exercise every interesting case.
 
 ### 4.1 Branch tree (who forks from whom)
 
@@ -83,51 +83,64 @@ repo with **15 branches** designed to exercise every interesting case.
 gitGraph
     commit id: "cfg scaffold"
     commit id: "logging"
-    branch "05-release/v1.0"
-    checkout "05-release/v1.0"
+    branch "A11-release/v1.0"
+    checkout "A11-release/v1.0"
     commit id: "smoke-tests [WI]"
     commit id: "release docs"
     checkout main
     commit id: "main pipeline"
     commit id: "Dockerfile"
     commit id: "terraform"
-    branch "15-feature/payment-gateway"
-    checkout "15-feature/payment-gateway"
+    branch "A13-feature/payment-gateway"
+    checkout "A13-feature/payment-gateway"
     commit id: "stripe [WI]"
     commit id: "txn_queue partial-lock [WI]"
-    branch "20-bugfix/payment-patch"
-    checkout "20-bugfix/payment-patch"
+    branch "A14-bugfix/payment-patch"
+    checkout "A14-bugfix/payment-patch"
     commit id: "DEFINITIVE FIX [WI]" type: HIGHLIGHT
-    checkout "15-feature/payment-gateway"
-    branch "25-feature/payment-hotfix"
-    checkout "25-feature/payment-hotfix"
+    checkout "A13-feature/payment-gateway"
+    branch "B2-feature/payment-hotfix"
+    checkout "B2-feature/payment-hotfix"
     commit id: "competing lock [WI]"
-    checkout "15-feature/payment-gateway"
-    branch "40-feature/ledger-audit"
-    checkout "40-feature/ledger-audit"
+    checkout "A13-feature/payment-gateway"
+    branch "C1-feature/ledger-audit"
+    checkout "C1-feature/ledger-audit"
     commit id: "reconciliation [WI]"
-    branch "50-feature/compliance-reporting"
-    checkout "50-feature/compliance-reporting"
+    branch "C3-feature/compliance-reporting"
+    checkout "C3-feature/compliance-reporting"
     commit id: "quarterly report [WI]"
+    checkout "A13-feature/payment-gateway"
+    branch "E1-feature/payment-refunds"
+    checkout "E1-feature/payment-refunds"
+    commit id: "refunds [WI]"
+    checkout "A13-feature/payment-gateway"
+    branch "E2-feature/payment-reconcile"
+    checkout "E2-feature/payment-reconcile"
+    commit id: "reconcile [WI]"
+    checkout "A13-feature/payment-gateway"
+    branch "E3-feature/payment-audit"
+    checkout "E3-feature/payment-audit"
+    commit id: "audit [WI]"
     checkout main
-    branch "60-feature/database-migration"
-    checkout "60-feature/database-migration"
+    branch "D1-feature/database-migration"
+    checkout "D1-feature/database-migration"
     commit id: "payment locks SQL [WI]"
-    commit id: "vendor txn_queue [WI]"
     checkout main
-    branch "70-infra/kubernetes-config"
-    checkout "70-infra/kubernetes-config"
+    branch "G6-infra/kubernetes-config"
+    checkout "G6-infra/kubernetes-config"
     commit id: "deploy env [WI]"
-    commit id: "bundle txn_queue [WI]"
 ```
 
-The numeric prefix encodes order: the fix branch is `20-`, so only branches
-numbered **higher than 20** (`25-`, `40-`, `50-`, `60-`, `70-`) can be eligible;
-`05-` and `15-` sort *before* the fix and are excluded by name.
+The letter+number prefix encodes order: the fix branch is `A14-`, so only
+branches whose prefix sorts **after** `A14` (`B2-`, `C1-`, `C3-`, `D1-`, `E1-`,
+`E2-`, `E3-`, `G6-`) can be eligible; `A11-`/`A12-`/`A13-` sort *before* the fix
+and are excluded by name. The comparison is byte-wise (`LC_ALL=C`), so letters
+order exactly like digits: `A14` < `B2` < `C1` < `E3` < `G6`. The `E*` branches
+fork from the gateway, so they carry the pre-fix file and cherry-pick cleanly.
 
-*(The other branches — `10-feature/user-auth`, `30-feature/ui-ux`,
-`35-feature/analytics-pipeline`, `45-feature/notifications`,
-`55-feature/mobile-api`, `65-feature/admin-dashboard` — all fork from `main` and
+*(The other branches — `A12-feature/user-auth`, `B3-feature/ui-ux`,
+`B4-feature/analytics-pipeline`, `C2-feature/notifications`,
+`C4-feature/mobile-api`, `D2-feature/admin-dashboard` — all fork from `main` and
 contain **no** WI commits. They exist as "noise" that must be correctly
 ignored.)*
 
@@ -137,32 +150,36 @@ The whole test hinges on what each branch's copy of the affected file looks like
 
 | State | Lock line | Branches | Propagation result |
 |-------|-----------|----------|--------------------|
-| **Pre-fix** | `threading.Lock()  # ... partial lock — race remains` | `15-feature/payment-gateway`, `40-feature/ledger-audit`, `50-feature/compliance-reporting`, `60-feature/database-migration`, `70-infra/kubernetes-config` | cherry-pick applies cleanly ✅ (when also eligible by name) |
-| **Definitive fix** | `threading.RLock()  # ... definitive thread-safe fix` | `20-bugfix/payment-patch` (source) | already fixed |
-| **Competing** | local `enqueue` workaround that diverges | `25-feature/payment-hotfix` | cherry-pick conflict ⚠️ |
-| **Absent** | file does not exist | `05-release/v1.0` + all no-WI branches | file added with the fix ➕ (when eligible) |
+| **Pre-fix** | `threading.Lock()  # ... partial lock — race remains` | `A13-feature/payment-gateway`, `C1-feature/ledger-audit`, `C3-feature/compliance-reporting`, `E1-feature/payment-refunds`, `E2-feature/payment-reconcile`, `E3-feature/payment-audit` | cherry-pick applies cleanly ✅ (when also eligible by name) |
+| **Definitive fix** | `threading.RLock()  # ... definitive thread-safe fix` | `A14-bugfix/payment-patch` (source) | already fixed |
+| **Competing** | `threading.Semaphore(1)` hotfix that diverges | `B2-feature/payment-hotfix` | cherry-pick conflict ⚠️ |
+| **Absent** | file does not exist | `A11-release/v1.0`, `D1-feature/database-migration`, `G6-infra/kubernetes-config` + all no-WI branches | file added with the fix ➕ (when eligible) |
 
 ### 4.3 Why each "interesting" branch exists
 
-| Branch | Name after `20-`? | WI in history? | Has the file? | Purpose in the test |
+| Branch | Name after `A14-`? | WI in history? | Has the file? | Purpose in the test |
 |--------|:---:|:---:|:---:|---------------------|
-| `20-bugfix/payment-patch` | — | ✅ | ✅ (fixed) | **Source** of the fix — skipped |
-| `05-release/v1.0` | ❌ | ✅ | ❌ | **Name sorts before fix** — excluded by name order |
-| `15-feature/payment-gateway` | ❌ | ✅ | ✅ pre-fix | **Name sorts before fix** (the fix's own parent) — excluded |
-| `40-feature/ledger-audit` | ✅ | ✅ | ✅ pre-fix | Happy path — gets the fix |
-| `50-feature/compliance-reporting` | ✅ | ✅ | ✅ pre-fix | Happy path — gets the fix |
-| `60-feature/database-migration` | ✅ | ✅ | ✅ pre-fix | Happy path — gets the fix |
-| `25-feature/payment-hotfix` | ✅ | ✅ | ✅ competing | **Conflict** case — reported, non-fatal |
-| `70-infra/kubernetes-config` | ✅ | ✅ | ✅ pre-fix | **Policy block** case — skipped on purpose |
+| `A14-bugfix/payment-patch` | — | ✅ | ✅ (fixed) | **Source** of the fix — skipped |
+| `A11-release/v1.0` | ❌ | ✅ | ❌ | **Name sorts before fix** — excluded by name order |
+| `A13-feature/payment-gateway` | ❌ | ✅ | ✅ pre-fix | **Name sorts before fix** (the fix's own parent) — excluded |
+| `C1-feature/ledger-audit` | ✅ | ✅ | ✅ pre-fix | Happy path — gets the fix |
+| `C3-feature/compliance-reporting` | ✅ | ✅ | ✅ pre-fix | Happy path — gets the fix |
+| `E1-feature/payment-refunds` | ✅ | ✅ | ✅ pre-fix | Happy path — gets the fix |
+| `E2-feature/payment-reconcile` | ✅ | ✅ | ✅ pre-fix | Happy path — gets the fix |
+| `E3-feature/payment-audit` | ✅ | ✅ | ✅ pre-fix | Happy path — gets the fix |
+| `D1-feature/database-migration` | ✅ | ✅ | ❌ | Eligible but **lacks the file** — file added, still gets a PR |
+| `B2-feature/payment-hotfix` | ✅ | ✅ | ✅ competing | **Conflict** case — reported, non-fatal |
+| `G6-infra/kubernetes-config` | ✅ | ✅ | ❌ | **Policy block** case — skipped on purpose |
 | 6 other branches | mixed | ❌ | ❌ | **Noise** — must be ignored |
 
-This gives a known-good fixture: **8 branches mention the WI**, but only those
-whose **name sorts after `20-`** *and* mention the WI are eligible — so **3
-receive the fix** (`40-feature/ledger-audit`, `50-feature/compliance-reporting`,
-`60-feature/database-migration`), `25-feature/payment-hotfix` conflicts,
-`70-infra/kubernetes-config` is blocked, and `05-release/v1.0` /
-`15-feature/payment-gateway` are excluded because their names sort on/before the
-fix branch.
+This gives a known-good fixture: **11 branches mention the WI**, but only those
+whose **name sorts after `A14-`** *and* mention the WI are eligible — so **6
+receive the fix** (`C1-feature/ledger-audit`, `C3-feature/compliance-reporting`,
+`D1-feature/database-migration`, `E1-feature/payment-refunds`,
+`E2-feature/payment-reconcile`, `E3-feature/payment-audit`),
+`B2-feature/payment-hotfix` conflicts, `G6-infra/kubernetes-config` is blocked,
+and `A11-release/v1.0` / `A13-feature/payment-gateway` are excluded because their
+names sort on/before the fix branch. Six clean PRs clears the `MIN_PRS=5` gate.
 
 ### 4.4 Functions inside `generate_complex_repo.sh`
 
@@ -253,7 +270,7 @@ Helper predicates that drive this (all small one-liners near the middle):
 | Function | Returns true when… |
 |----------|--------------------|
 | `branch_mentions_wi` | the branch's commit history has ≥1 commit mentioning the WI |
-| `name_after_source` | the branch name sorts strictly **after** `SOURCE_BRANCH` (byte-wise, `LC_ALL=C`) — the numeric-prefix ordering rule |
+| `name_after_source` | the branch name sorts strictly **after** `SOURCE_BRANCH` (byte-wise, `LC_ALL=C`) — the letter+number-prefix ordering rule |
 | `branch_has_file` | the affected file exists on the branch |
 | `branch_has_fix` | the affected file already contains the fix marker |
 | `is_blocked` | branch is in `BLOCKED_BRANCHES` |
@@ -432,7 +449,7 @@ sequenceDiagram
     participant Git as git
     participant Ver as verify_propagation.sh
 
-    U->>Gen: build fixture (15 branches)
+    U->>Gen: build fixture (18 branches)
     Gen->>Git: init + many commits + branches
     U->>Prop: propagate into fixture
     Prop->>Git: find definitive fix commit
@@ -459,12 +476,12 @@ sequenceDiagram
 | Variable | Used by | Default | Meaning |
 |----------|---------|---------|---------|
 | `WI_ID` | all | `WI-440219` | Work item ID |
-| `SOURCE_BRANCH` | propagate, verify | `20-bugfix/payment-patch` | Branch holding the fix |
+| `SOURCE_BRANCH` | propagate, verify | `A14-bugfix/payment-patch` | Branch holding the fix |
 | `AFFECTED_FILE` | propagate, verify | `src/payment/transaction_queue.py` | File the fix changes |
 | `FIX_MARKER` | propagate, verify | `threading.RLock()  # WI-440219: definitive thread-safe fix` | Line used to detect a branch that already has the fix |
 | `BRANCH_SELECT_MODE` | propagate, verify | `wi-history` | `wi-history` or `affected-file` |
 | `PROPAGATION_MODE` | propagate, verify | `direct` | `direct` or `pr` |
-| `BLOCKED_BRANCHES` | propagate, verify | `70-infra/kubernetes-config infra/kubernetes-config` | Branches to skip even if eligible (second entry is the protected pre-rename name still on origin) |
+| `BLOCKED_BRANCHES` | propagate, verify | `G6-infra/kubernetes-config infra/kubernetes-config` | Branches to skip even if eligible (second entry is the protected pre-rename name still on origin) |
 | `PROTECTED_BRANCHES` | propagate, verify | `main master` | Integration branches that never receive the fix |
 | `MIN_PRS` | propagate | `5` | PR-mode minimum to pass |
 | `DRY_RUN` | propagate | `false` | Don't push/open PRs |
@@ -476,22 +493,27 @@ sequenceDiagram
 
 | Branch | Direct mode | PR mode |
 |--------|-------------|---------|
-| `40-feature/ledger-audit` | fix cherry-picked | PR opened |
-| `50-feature/compliance-reporting` | fix cherry-picked | PR opened |
-| `60-feature/database-migration` | fix cherry-picked | PR opened |
-| `25-feature/payment-hotfix` | conflict (reported) | no PR — conflict reported |
-| `70-infra/kubernetes-config` | skipped (blocked) | no PR (blocked) |
-| `15-feature/payment-gateway` | skipped (name on/before fix) | skipped (name on/before fix) |
-| `05-release/v1.0` | skipped (name on/before fix) | skipped (name on/before fix) |
-| `20-bugfix/payment-patch` | source (skipped) | source (skipped) |
+| `C1-feature/ledger-audit` | fix cherry-picked | PR opened |
+| `C3-feature/compliance-reporting` | fix cherry-picked | PR opened |
+| `D1-feature/database-migration` | file added with fix | PR opened |
+| `E1-feature/payment-refunds` | fix cherry-picked | PR opened |
+| `E2-feature/payment-reconcile` | fix cherry-picked | PR opened |
+| `E3-feature/payment-audit` | fix cherry-picked | PR opened |
+| `B2-feature/payment-hotfix` | conflict (reported) | no PR — conflict reported |
+| `G6-infra/kubernetes-config` | skipped (blocked) | no PR (blocked) |
+| `A13-feature/payment-gateway` | skipped (name on/before fix) | skipped (name on/before fix) |
+| `A11-release/v1.0` | skipped (name on/before fix) | skipped (name on/before fix) |
+| `A14-bugfix/payment-patch` | source (skipped) | source (skipped) |
 | `main` | skipped (protected) | skipped (protected) |
 | 6 other branches | skipped (no WI) | skipped |
 
-Net result: **3 applications / 3 PRs** (`40-feature/ledger-audit`,
-`50-feature/compliance-reporting`, `60-feature/database-migration`), with one
-conflict (`25-feature/payment-hotfix`), one policy block
-(`70-infra/kubernetes-config`), and two branches excluded purely by the
-name-order rule (`15-feature/payment-gateway`, `05-release/v1.0`) even though
+Net result: **6 applications / 6 PRs** (`C1-feature/ledger-audit`,
+`C3-feature/compliance-reporting`, `D1-feature/database-migration`,
+`E1-feature/payment-refunds`, `E2-feature/payment-reconcile`,
+`E3-feature/payment-audit`) — clearing the `MIN_PRS=5` gate — with one
+conflict (`B2-feature/payment-hotfix`), one policy block
+(`G6-infra/kubernetes-config`), and two branches excluded purely by the
+name-order rule (`A13-feature/payment-gateway`, `A11-release/v1.0`) even though
 they mention the WI.
 
 ---
@@ -500,7 +522,7 @@ they mention the WI.
 
 | File | One-line role |
 |------|---------------|
-| `generate_complex_repo.sh` | Builds the deterministic 15-branch test fixture |
+| `generate_complex_repo.sh` | Builds the deterministic 18-branch test fixture |
 | `scripts/propagate_patch.sh` | Finds the fix commit and applies it (direct cherry-pick or PR) |
 | `scripts/verify_propagation.sh` | Asserts the propagation outcome is exactly right |
 | `scripts/notify_propagation.sh` | Turns `results.tsv` into a grouped report + optional email |

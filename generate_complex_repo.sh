@@ -148,9 +148,9 @@ commit_change \
 
 # --- release/v1.0 forks from early main (after 2 baseline commits) ---
 
-section "Branch: 05-release/v1.0 (from early main)"
+section "Branch: A11-release/v1.0 (from early main)"
 
-new_branch "05-release/v1.0"
+new_branch "A11-release/v1.0"
 
 commit_change \
   "Stage production build pipeline configuration" \
@@ -228,9 +228,9 @@ commit_change \
 # feature/user-auth (from main)
 # ---------------------------------------------------------------------------
 
-section "Branch: 10-feature/user-auth (from main)"
+section "Branch: A12-feature/user-auth (from main)"
 
-new_branch "10-feature/user-auth" "main"
+new_branch "A12-feature/user-auth" "main"
 
 commit_change \
   "Implement JWT token issuance and validation middleware" \
@@ -285,9 +285,9 @@ commit_change \
 # feature/payment-gateway (from main) — WI in commits #2 and #4
 # ---------------------------------------------------------------------------
 
-section "Branch: 15-feature/payment-gateway (from main)"
+section "Branch: A13-feature/payment-gateway (from main)"
 
-new_branch "15-feature/payment-gateway" "main"
+new_branch "A13-feature/payment-gateway" "main"
 
 commit_change \
   "Scaffold payment gateway service and routing layer" \
@@ -342,9 +342,9 @@ commit_change \
 # Commit #5 = definitive fix (propagation target)
 # ---------------------------------------------------------------------------
 
-section "Branch: 20-bugfix/payment-patch (from 15-feature/payment-gateway)"
+section "Branch: A14-bugfix/payment-patch (from A13-feature/payment-gateway)"
 
-new_branch "20-bugfix/payment-patch" "15-feature/payment-gateway"
+new_branch "A14-bugfix/payment-patch" "A13-feature/payment-gateway"
 
 commit_change \
   "Reproduce race condition in concurrent payment processing" \
@@ -399,12 +399,87 @@ commit_change \
   "            return txn['id'] in self._processed_ids"
 
 # ---------------------------------------------------------------------------
+# feature/payment-hotfix (from feature/payment-gateway)
+# Carries a COMPETING change to the affected file, so cherry-picking the
+# definitive fix conflicts — exercises the reported, non-fatal conflict path.
+# ---------------------------------------------------------------------------
+
+section "Branch: B2-feature/payment-hotfix (from A13-feature/payment-gateway)"
+
+new_branch "B2-feature/payment-hotfix" "A13-feature/payment-gateway"
+
+commit_change \
+  "Apply emergency semaphore workaround for payment race ${WI}" \
+  "src/payment/transaction_queue.py" \
+  "import threading" \
+  "from queue import Queue" \
+  "" \
+  "class TransactionQueue:" \
+  "    def __init__(self):" \
+  "        self._queue = Queue()" \
+  "        self._sema = threading.Semaphore(1)  # WI-440219: hotfix semaphore (competing)" \
+  "" \
+  "    def enqueue(self, txn: dict) -> None:" \
+  "        self._sema.acquire()" \
+  "        try:" \
+  "            self._queue.put(txn)" \
+  "        finally:" \
+  "            self._sema.release()"
+
+# ---------------------------------------------------------------------------
+# feature/payment-refunds (from feature/payment-gateway) — WI, clean cherry-pick
+# Forked from the gateway so it carries the pre-fix affected file; the
+# definitive fix applies cleanly. Name sorts after the source.
+# ---------------------------------------------------------------------------
+
+section "Branch: E1-feature/payment-refunds (from A13-feature/payment-gateway)"
+
+new_branch "E1-feature/payment-refunds" "A13-feature/payment-gateway"
+
+commit_change \
+  "Add idempotent refund processor for disputed charges ${WI}" \
+  "src/payment/refunds.py" \
+  "def process_refund(txn_id: str, amount_cents: int) -> dict:" \
+  "    # WI-440219: refunds must respect the same thread-safe queue contract" \
+  "    return {'txn_id': txn_id, 'refunded': amount_cents, 'status': 'queued'}"
+
+# ---------------------------------------------------------------------------
+# feature/payment-reconcile (from feature/payment-gateway) — WI, clean cherry-pick
+# ---------------------------------------------------------------------------
+
+section "Branch: E2-feature/payment-reconcile (from A13-feature/payment-gateway)"
+
+new_branch "E2-feature/payment-reconcile" "A13-feature/payment-gateway"
+
+commit_change \
+  "Build nightly settlement reconciliation job ${WI}" \
+  "src/payment/reconcile.py" \
+  "def reconcile_settlements(date: str) -> dict:" \
+  "    # WI-440219: reconcile depends on the de-duplicated transaction queue" \
+  "    return {'date': date, 'matched': 0, 'unmatched': 0}"
+
+# ---------------------------------------------------------------------------
+# feature/payment-audit (from feature/payment-gateway) — WI, clean cherry-pick
+# ---------------------------------------------------------------------------
+
+section "Branch: E3-feature/payment-audit (from A13-feature/payment-gateway)"
+
+new_branch "E3-feature/payment-audit" "A13-feature/payment-gateway"
+
+commit_change \
+  "Emit structured audit events for every charge attempt ${WI}" \
+  "src/payment/audit.py" \
+  "def audit_charge(txn: dict) -> None:" \
+  "    # WI-440219: audit trail keyed by the queue's de-duplicated txn id" \
+  "    emit_event('charge.attempt', {'id': txn.get('id')})"
+
+# ---------------------------------------------------------------------------
 # feature/ui-ux (from main)
 # ---------------------------------------------------------------------------
 
-section "Branch: 30-feature/ui-ux (from main)"
+section "Branch: B3-feature/ui-ux (from main)"
 
-new_branch "30-feature/ui-ux" "main"
+new_branch "B3-feature/ui-ux" "main"
 
 commit_change \
   "Establish design system tokens and color palette" \
@@ -453,9 +528,9 @@ commit_change \
 # feature/analytics-pipeline (from main) — no WI
 # ---------------------------------------------------------------------------
 
-section "Branch: 35-feature/analytics-pipeline (from main)"
+section "Branch: B4-feature/analytics-pipeline (from main)"
 
-new_branch "35-feature/analytics-pipeline" "main"
+new_branch "B4-feature/analytics-pipeline" "main"
 
 commit_change \
   "Define analytics event schema and ingestion contract" \
@@ -501,9 +576,9 @@ commit_change \
 # feature/ledger-audit (from feature/payment-gateway) — WI commit #2 (1/4)
 # ---------------------------------------------------------------------------
 
-section "Branch: 40-feature/ledger-audit (from 15-feature/payment-gateway)"
+section "Branch: C1-feature/ledger-audit (from A13-feature/payment-gateway)"
 
-new_branch "40-feature/ledger-audit" "15-feature/payment-gateway"
+new_branch "C1-feature/ledger-audit" "A13-feature/payment-gateway"
 
 commit_change \
   "Initialize immutable ledger store with append-only log" \
@@ -550,9 +625,9 @@ commit_change \
 # feature/notifications (from main) — no WI
 # ---------------------------------------------------------------------------
 
-section "Branch: 45-feature/notifications (from main)"
+section "Branch: C2-feature/notifications (from main)"
 
-new_branch "45-feature/notifications" "main"
+new_branch "C2-feature/notifications" "main"
 
 commit_change \
   "Scaffold notification service with template engine" \
@@ -605,9 +680,9 @@ commit_change \
 # feature/compliance-reporting (from feature/ledger-audit) — WI commit #4 (2/4)
 # ---------------------------------------------------------------------------
 
-section "Branch: 50-feature/compliance-reporting (from 40-feature/ledger-audit)"
+section "Branch: C3-feature/compliance-reporting (from C1-feature/ledger-audit)"
 
-new_branch "50-feature/compliance-reporting" "40-feature/ledger-audit"
+new_branch "C3-feature/compliance-reporting" "C1-feature/ledger-audit"
 
 commit_change \
   "Define compliance report schema for financial filings" \
@@ -655,9 +730,9 @@ commit_change \
 # feature/mobile-api (from main) — no WI
 # ---------------------------------------------------------------------------
 
-section "Branch: 55-feature/mobile-api (from main)"
+section "Branch: C4-feature/mobile-api (from main)"
 
-new_branch "55-feature/mobile-api" "main"
+new_branch "C4-feature/mobile-api" "main"
 
 commit_change \
   "Scaffold mobile REST API with FastAPI router" \
@@ -706,9 +781,9 @@ commit_change \
 # feature/database-migration (from main) — WI commit #1 (3/4)
 # ---------------------------------------------------------------------------
 
-section "Branch: 60-feature/database-migration (from main)"
+section "Branch: D1-feature/database-migration (from main)"
 
-new_branch "60-feature/database-migration" "main"
+new_branch "D1-feature/database-migration" "main"
 
 commit_change \
   "Add schema migration for payment table locks related to ${WI}" \
@@ -752,9 +827,9 @@ commit_change \
 # feature/admin-dashboard (from main) — no WI
 # ---------------------------------------------------------------------------
 
-section "Branch: 65-feature/admin-dashboard (from main)"
+section "Branch: D2-feature/admin-dashboard (from main)"
 
-new_branch "65-feature/admin-dashboard" "main"
+new_branch "D2-feature/admin-dashboard" "main"
 
 commit_change \
   "Scaffold admin dashboard shell with navigation layout" \
@@ -799,9 +874,9 @@ commit_change \
 # infra/kubernetes-config (from main) — WI commit #3 (4/4)
 # ---------------------------------------------------------------------------
 
-section "Branch: 70-infra/kubernetes-config (from main)"
+section "Branch: G6-infra/kubernetes-config (from main)"
 
-new_branch "70-infra/kubernetes-config" "main"
+new_branch "G6-infra/kubernetes-config" "main"
 
 commit_change \
   "Add base Helm chart for payment service deployment" \
@@ -881,8 +956,8 @@ echo
 echo "Commits mentioning ${WI}:"
 list_wi_commits | sed 's/^/  /'
 echo
-echo "Target propagation commit (20-bugfix/payment-patch):"
-git log 20-bugfix/payment-patch --oneline -1 | sed 's/^/  /'
+echo "Target propagation commit (A14-bugfix/payment-patch):"
+git log A14-bugfix/payment-patch --oneline -1 | sed 's/^/  /'
 echo
 echo "Full branch graph:"
 print_branch_graph

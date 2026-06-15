@@ -27,7 +27,7 @@ REPO_DIR="$(cd "${REPO_DIR}" && pwd)"
 WI_ID="${WI_ID:-WI-440219}"
 AFFECTED_FILE="${AFFECTED_FILE:-src/payment/transaction_queue.py}"
 FIX_MARKER="${FIX_MARKER:-threading.RLock()  # WI-440219: definitive thread-safe fix}"
-SOURCE_BRANCH="${SOURCE_BRANCH:-20-bugfix/payment-patch}"
+SOURCE_BRANCH="${SOURCE_BRANCH:-A14-bugfix/payment-patch}"
 BRANCH_SELECT_MODE="${BRANCH_SELECT_MODE:-wi-history}"
 PRS_FILE="${PRS_FILE:-${REPO_DIR}/.propagation-logs/pull-requests.txt}"
 SUMMARY_FILE="${SUMMARY_FILE:-${REPO_DIR}/.propagation-logs/propagation-summary.txt}"
@@ -37,7 +37,7 @@ RESULTS_FILE="${RESULTS_FILE:-${REPO_DIR}/.propagation-logs/results.tsv}"
 # unprefixed "infra/kubernetes-config" is the pre-rename name still present on
 # origin as a protected branch; it is blocked too so the stale ref verifies as
 # "no PR" (safe to drop once that branch is removed).
-BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-70-infra/kubernetes-config infra/kubernetes-config}"
+BLOCKED_BRANCHES="${BLOCKED_BRANCHES:-G6-infra/kubernetes-config infra/kubernetes-config}"
 BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
 # Protected integration branches that must never receive a PR (matches propagate).
 PROTECTED_BRANCHES="${PROTECTED_BRANCHES:-main master}"
