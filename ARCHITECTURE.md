@@ -179,7 +179,8 @@ receive the fix** (`C1-feature/ledger-audit`, `C3-feature/compliance-reporting`,
 `E2-feature/payment-reconcile`, `E3-feature/payment-audit`),
 `B2-feature/payment-hotfix` conflicts, `G6-infra/kubernetes-config` is blocked,
 and `A11-release/v1.0` / `A13-feature/payment-gateway` are excluded because their
-names sort on/before the fix branch. Six clean PRs clears the `MIN_PRS=5` gate.
+names sort on/before the fix branch. The run opens one PR per eligible branch
+(6 with this fixture); there is no minimum-PR gate.
 
 ### 4.4 Functions inside `generate_complex_repo.sh`
 
@@ -207,7 +208,7 @@ This is where the actual propagation happens. It runs in one of two modes.
 
 Everything is overridable via environment variables (with sensible defaults):
 `WI_ID`, `SOURCE_BRANCH`, `AFFECTED_FILE`, `FIX_MARKER`, `BRANCH_SELECT_MODE`,
-`PROPAGATION_MODE`, `BLOCKED_BRANCHES`, `MIN_PRS`, `DRY_RUN`. It then creates a
+`PROPAGATION_MODE`, `BLOCKED_BRANCHES`, `DRY_RUN`. It then creates a
 `.propagation-logs/` directory and four output files:
 
 | File | Contents |
@@ -337,7 +338,8 @@ file added instead.
 The script's exit code policy:
 
 - Conflicts are **reported but never fail** the run.
-- In PR mode, fewer than `MIN_PRS` pull requests **is** a failure.
+- The PR count is **never** a failure condition — the run passes for whatever
+  number of eligible PRs it opens (including zero).
 - Any *unexpected* failure **is** a failure.
 
 ---
@@ -483,7 +485,6 @@ sequenceDiagram
 | `PROPAGATION_MODE` | propagate, verify | `direct` | `direct` or `pr` |
 | `BLOCKED_BRANCHES` | propagate, verify | `G6-infra/kubernetes-config infra/kubernetes-config` | Branches to skip even if eligible (second entry is the protected pre-rename name still on origin) |
 | `PROTECTED_BRANCHES` | propagate, verify | `main master` | Integration branches that never receive the fix |
-| `MIN_PRS` | propagate | `5` | PR-mode minimum to pass |
 | `DRY_RUN` | propagate | `false` | Don't push/open PRs |
 | `NOTIFY_EMAIL_TO/FROM`, `SMTP_*` | notify | — | Email delivery (optional) |
 
@@ -510,8 +511,8 @@ sequenceDiagram
 Net result: **6 applications / 6 PRs** (`C1-feature/ledger-audit`,
 `C3-feature/compliance-reporting`, `D1-feature/database-migration`,
 `E1-feature/payment-refunds`, `E2-feature/payment-reconcile`,
-`E3-feature/payment-audit`) — clearing the `MIN_PRS=5` gate — with one
-conflict (`B2-feature/payment-hotfix`), one policy block
+`E3-feature/payment-audit`) — one PR per eligible branch, with no minimum-PR
+gate — with one conflict (`B2-feature/payment-hotfix`), one policy block
 (`G6-infra/kubernetes-config`), and two branches excluded purely by the
 name-order rule (`A13-feature/payment-gateway`, `A11-release/v1.0`) even though
 they mention the WI.

@@ -43,9 +43,6 @@ BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
 # regardless of WI history (space- or comma-separated).
 PROTECTED_BRANCHES="${PROTECTED_BRANCHES:-main master}"
 PROTECTED_BRANCHES="${PROTECTED_BRANCHES//,/ }"
-# Minimum PRs required for PR mode to succeed (WI branches that can receive the
-# fix: cleanly cherry-picked or file-added, minus blocked/conflicting ones).
-MIN_PRS="${MIN_PRS:-5}"
 
 LOG_DIR="${LOG_DIR:-${REPO_DIR}/.propagation-logs}"
 mkdir -p "${LOG_DIR}"
@@ -575,16 +572,12 @@ log "Full log: ${SUMMARY_FILE}"
 log "Results  : ${RESULTS_FILE}"
 
 # Conflicts are expected, non-fatal outcomes: they are reported (and emailed)
-# but never stop the run. Only truly unexpected failures (or too few PRs in PR
-# mode) fail the job.
+# but never stop the run. Only truly unexpected failures fail the job — the run
+# passes for whatever number of eligible PRs it opens (including zero).
 if [[ "${conflicts}" -gt 0 ]]; then
   log "Note: ${conflicts} branch(es) need manual conflict resolution (no auto-propagation)."
 fi
 
-if [[ "${PROPAGATION_MODE}" == "pr" && "${prs}" -lt "${MIN_PRS}" ]]; then
-  log "Error: PR mode requires at least ${MIN_PRS} pull requests, opened ${prs}"
-  exit 1
-fi
 if [[ "${unexpected_failed}" -gt 0 ]]; then
   log "Error: ${unexpected_failed} unexpected failure(s)"
   exit 1

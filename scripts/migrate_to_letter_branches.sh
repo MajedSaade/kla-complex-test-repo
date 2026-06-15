@@ -2,7 +2,8 @@
 #
 # migrate_to_letter_branches.sh — Re-point the live repo's fixture branches at
 # the new letter+number naming scheme (A11, A12, …, B2, …, G6) and add the
-# extra payment-family WI branches, so the PR-mode run opens >= MIN_PRS (5).
+# extra payment-family WI branches, so the PR-mode run opens a PR per eligible
+# branch (6 with the current fixture).
 #
 # It does NOT touch `main` (which holds the tooling on the live repo). It only
 # (re)creates the generated *fixture* branches and removes the legacy

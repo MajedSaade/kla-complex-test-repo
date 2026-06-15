@@ -24,10 +24,12 @@ directly onto a live branch.
 | `scripts/run_pipeline.sh` | Local end-to-end run (dry-run): generate → propagate → verify |
 | `scripts/migrate_to_letter_branches.sh` | Re-point the live repo's fixture branches at the letter scheme (push access required) |
 | `.github/workflows/patch-propagation.yml` | CI: integration test + live PR opening |
+| `USER_MANUAL.md` | Hands-on operator's guide: how to run everything, step by step |
 | `ARCHITECTURE.md` | Detailed walkthrough of how everything works (with diagrams) |
 
-> New here? Read **[ARCHITECTURE.md](ARCHITECTURE.md)** for a full, diagrammed
-> explanation of every file, function, and how the pieces connect.
+> New here? Read the **[USER_MANUAL.md](USER_MANUAL.md)** for a step-by-step guide
+> to running the system, or **[ARCHITECTURE.md](ARCHITECTURE.md)** for a full,
+> diagrammed explanation of every file, function, and how the pieces connect.
 
 ### Dynamic, with the "no hardcoding" guarantee
 
@@ -116,9 +118,10 @@ is added and it still gets a PR. (The WI-but-no-file branch `A11-release/v1.0`
 sorts before the fix branch, so it is excluded by the name-order rule instead.)
 
 ```bash
-# Block more branches (space- or comma-separated); remember to lower MIN_PRS.
+# Block more branches (space- or comma-separated); the run opens a PR for
+# whatever branches remain eligible.
 BLOCKED_BRANCHES="G6-infra/kubernetes-config C1-feature/ledger-audit" \
-MIN_PRS=2 ./scripts/propagate_patch.sh .
+./scripts/propagate_patch.sh .
 ```
 
 ## GitHub Actions
@@ -165,7 +168,7 @@ APPLY=true ./scripts/migrate_to_letter_branches.sh
 
 This force-pushes the freshly generated `A*/B*/C*/D*/E*/G*` fixture branches and
 removes the old `05-`…`70-` ones, after which the **Live repo PRs** job opens
-6 PRs and clears the `MIN_PRS=5` gate.
+6 PRs (one per eligible branch).
 
 ### Email notification
 
@@ -205,7 +208,8 @@ appears). Run it locally too: `./scripts/notify_propagation.sh .`
 | `main` | Skipped (protected) |
 | All other branches | Skipped (no WI history) |
 
-The run opens **6 pull requests** (so it clears the `MIN_PRS=5` gate). The
+The run opens **6 pull requests** — one per eligible branch. There is no minimum
+PR count: the run passes for whatever number of eligible PRs it opens. The
 interesting cases:
 
 - `A13-feature/payment-gateway` and `A11-release/v1.0` mention the WI but their
