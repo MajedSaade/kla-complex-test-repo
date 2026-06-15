@@ -35,13 +35,13 @@ EXPECTED_FIXED=(
   feature/payment-gateway
   feature/ledger-audit
   feature/compliance-reporting
+  feature/database-migration
+  infra/kubernetes-config
 )
 
 # WI-history branches that must NOT get the fix (they lack the affected file).
 EXPECTED_WI_BUT_NO_FIX=(
   release/v1.0
-  feature/database-migration
-  infra/kubernetes-config
 )
 
 # Branches with no WI history at all (must be untouched). Only checked in
@@ -154,10 +154,10 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
   done
 
   echo ""
-  if [[ "${satisfied}" -ge 3 ]]; then
-    check_pass "All 3 payment branches have a PR or the fix (${satisfied}/3 satisfied)"
+  if [[ "${satisfied}" -ge "${#EXPECTED_FIXED[@]}" ]]; then
+    check_pass "All ${#EXPECTED_FIXED[@]} eligible branches have a PR or the fix (${satisfied}/${#EXPECTED_FIXED[@]} satisfied)"
   else
-    check_fail "Expected 3 satisfied branches, got ${satisfied}"
+    check_fail "Expected ${#EXPECTED_FIXED[@]} satisfied branches, got ${satisfied}"
   fi
 
   echo ""
@@ -229,10 +229,10 @@ definitive_count="$(
     | grep -F "Apply definitive thread-safe fix" \
     | grep -cF "${WI_ID}" || true
 )"
-if [[ "${definitive_count}" -ge 4 ]]; then
+if [[ "${definitive_count}" -ge 6 ]]; then
   check_pass "Definitive fix propagated to payment branches (${definitive_count} commits)"
 else
-  check_fail "Expected ≥4 definitive-fix commits, found ${definitive_count}"
+  check_fail "Expected ≥6 definitive-fix commits, found ${definitive_count}"
 fi
 
 wi_branches=0
