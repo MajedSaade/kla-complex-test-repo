@@ -34,9 +34,9 @@ synthetic fixture in `.generated-fixture/` and acts as a generator regression te
 
 - **Work item:** `[WI-440219]`
 - **Source branch:** `bugfix/payment-patch`
-- **Fix commit selection:** newest commit on the source branch whose message contains `[WI-440219]`, verified to include the definitive fix marker in `src/payment/transaction_queue.py`
-- **Affected file:** `src/payment/transaction_queue.py`
-- **Target branches (default `wi-history` mode):** any branch whose history mentions `WI-440219`
+- **Fix commit selection:** the newest commit on the source branch whose message contains `[WI-440219]` — that is the whole rule (no marker check)
+- **Affected file:** `src/payment/transaction_queue.py` (taken from the fix commit; cherry-picked where the file exists, added wholesale where it does not)
+- **Target branches (default `wi-history` mode):** any branch whose history mentions `WI-440219`, whether or not it already has the affected file
 
 ## Local usage
 
@@ -66,9 +66,14 @@ PROPAGATION_MODE=pr ./scripts/verify_propagation.sh .
 A branch is **skipped / gets no PR** when any of these hold:
 
 - its history has no `WI-440219` mention (not a target), or
-- it lacks the affected file, so the cherry-pick fails (e.g. `release/v1.0`), or
+- it has the affected file but a **competing change** makes the cherry-pick
+  conflict (e.g. `feature/payment-hotfix`) — reported, not applied, or
 - it is listed in `BLOCKED_BRANCHES` (default `infra/kubernetes-config`) — an
   explicit policy block that wins even if the branch otherwise qualifies.
+
+A WI branch that simply **lacks** the affected file (e.g. `release/v1.0`) is
+**not** skipped: the fix introduces the file (the full fixed version is added),
+so the branch still gets a PR.
 
 ```bash
 # Block more branches (space- or comma-separated); remember to lower MIN_PRS.
@@ -132,13 +137,13 @@ appears). Run it locally too: `PROPAGATION_MODE=pr ./scripts/notify_propagation.
 | `feature/ledger-audit` | Fix cherry-picked | PR opened |
 | `feature/compliance-reporting` | Fix cherry-picked | PR opened |
 | `feature/database-migration` | Fix cherry-picked | PR opened |
+| `release/v1.0` | Fix added (file created) | PR opened |
 | `feature/payment-hotfix` | Conflict (not applied) | No PR — conflict reported |
 | `infra/kubernetes-config` | Skipped (blocked) | No PR (blocked) |
 | `bugfix/payment-patch` | Source (skipped) | Source (skipped) |
-| `release/v1.0` | Fail (no affected file) | No PR |
 | All other branches | Skipped (no WI history) | Skipped |
 
-PR mode opens **4 pull requests**. Two branches are intentional negative cases:
+PR mode opens **5 pull requests**. Two branches are intentional negative cases:
 
 - `infra/kubernetes-config` fully qualifies (WI history + affected file) but is in
   `BLOCKED_BRANCHES`, so it is skipped — the block overrides eligibility.
@@ -146,3 +151,6 @@ PR mode opens **4 pull requests**. Two branches are intentional negative cases:
   change makes the cherry-pick **conflict**. The conflict is **reported** (in the
   summary, `results.tsv`, and the notification email) and the run **keeps going**
   — a conflict never crashes the workflow.
+
+`release/v1.0` has WI history but no `transaction_queue.py`; rather than being
+skipped, the fix **adds** the file (the full fixed version), so it gets a PR.

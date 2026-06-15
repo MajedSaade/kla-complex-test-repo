@@ -39,19 +39,24 @@ BLOCKED_BRANCHES="${BLOCKED_BRANCHES//,/ }"
 # Direct-mode (fixture self-test) expectations. These describe the KNOWN shape
 # of the synthetic fixture produced by generate_complex_repo.sh — never real
 # GitHub branches. The PR-mode path below derives everything dynamically.
+#
+# Branches that already carry the affected file and get the fix cherry-picked:
 EXPECTED_FIXED=(
   feature/payment-gateway
   feature/ledger-audit
   feature/compliance-reporting
   feature/database-migration
 )
-# WI branches that end up WITHOUT the definitive fix:
-#   release/v1.0            — lacks the affected file (cherry-pick fails)
+# WI branches that LACK the affected file and get it ADDED with the fix:
+#   release/v1.0 — has WI history but no transaction_queue.py; the file is added.
+EXPECTED_WI_FILE_ADDED=(
+  release/v1.0
+)
+# WI branches that end up WITHOUT the fix:
 #   infra/kubernetes-config — qualifies, but blocked via BLOCKED_BRANCHES
 #   feature/payment-hotfix  — has the file, but its competing change makes the
 #                             cherry-pick conflict, so the fix is not applied
 EXPECTED_WI_BUT_NO_FIX=(
-  release/v1.0
   infra/kubernetes-config
   feature/payment-hotfix
 )
@@ -169,7 +174,7 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
     exit 1
   fi
 
-  # Classify a branch into: eligible | blocked | source | skip | cannot-apply.
+  # Classify a branch into: eligible | blocked | source | propagation | skip-*.
   classify_branch() {
     local b="$1"
     [[ "${b}" == "${SOURCE_BRANCH}" ]] && { echo source; return; }
@@ -177,8 +182,7 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
     is_blocked "${b}" && { echo blocked; return; }
     case "${BRANCH_SELECT_MODE}" in
       wi-history)
-        branch_mentions_wi "${b}" || { echo skip-no-wi; return; }
-        branch_has_file "${b}" && echo eligible || echo cannot-apply ;;
+        branch_mentions_wi "${b}" && echo eligible || echo skip-no-wi ;;
       affected-file)
         branch_has_file "${b}" && echo eligible || echo skip-no-file ;;
       *) echo skip-no-wi ;;
@@ -215,7 +219,6 @@ if [[ "${PROPAGATION_MODE}" == "pr" ]]; then
       eligible|propagation) continue ;;
       source)        reason="source branch" ;;
       blocked)       reason="blocked by policy" ;;
-      cannot-apply)  reason="WI history but missing '${AFFECTED_FILE}'" ;;
       skip-no-wi)    reason="no ${WI_ID} in history" ;;
       skip-no-file)  reason="affected file not present" ;;
       *)             reason="not selected" ;;
@@ -247,6 +250,11 @@ fi
 # Direct mode: assert the fix is present/absent on the right branches.
 # ---------------------------------------------------------------------------
 EXPECTED_FIXED=(bugfix/payment-patch "${EXPECTED_FIXED[@]}")
+# In wi-history mode, branches that lacked the file get it added with the fix,
+# so they must also end up carrying the definitive fix.
+if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]]; then
+  EXPECTED_FIXED=("${EXPECTED_FIXED[@]}" "${EXPECTED_WI_FILE_ADDED[@]}")
+fi
 
 echo "--- Branches that MUST have the fix ---"
 for branch in "${EXPECTED_FIXED[@]}"; do
@@ -265,7 +273,7 @@ done
 
 if [[ "${BRANCH_SELECT_MODE}" == "wi-history" ]]; then
   echo ""
-  echo "--- WI branches that should NOT receive the fix (no affected file) ---"
+  echo "--- WI branches that should NOT receive the fix (blocked or conflicting) ---"
   for branch in "${EXPECTED_WI_BUT_NO_FIX[@]}"; do
     if ! branch_mentions_wi "${branch}"; then
       check_fail "${branch} — expected WI mention in history"
