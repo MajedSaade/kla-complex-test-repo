@@ -415,6 +415,12 @@ real branches:
 ./scripts/run_pipeline.sh /tmp/demo  # or any throwaway dir
 ```
 
+- **Where/when it runs:** on a developer's machine, on demand (never in CI).
+- **Purpose:** the *inner-loop sanity check* — fast, private feedback that the
+  whole system still works **before** committing or pushing. No network, no
+  tokens, no GitHub account. It builds a fake repo, mutates it with direct
+  cherry-picks, verifies, and is thrown away — so nothing real is touched.
+
 ### 8.2 CI: `.github/workflows/patch-propagation.yml`
 
 ```mermaid
@@ -433,10 +439,40 @@ flowchart TD
 - **Job 1 (`full-integration`)** builds a fresh fixture and runs the whole
   direct-mode flow in one checkout. It needs no secrets and is the gate that
   must always pass.
+  - **Where/when it runs:** on a GitHub-hosted runner (`ubuntu-latest`),
+    automatically on every push/PR to `main`/`master` and on manual
+    `workflow_dispatch`.
+  - **Purpose:** the *outer-loop guard rail* — the automated, unavoidable
+    version of the local pipeline. It enforces the same correctness check for
+    every change on a clean machine (no "works on my machine"), blocks merges
+    when propagation breaks, and uploads logs as artifacts for debugging.
 - **Job 2 (`live-repo-prs`)** opens *real* PRs on this repo. Because GitHub's
   default `GITHUB_TOKEN` is not allowed to open PRs, it needs a Personal Access
   Token stored as the `PROPAGATION_TOKEN` secret. If that secret is missing the
   job **skips with a notice** instead of failing.
+  - **Where/when it runs:** on a GitHub-hosted runner, after Job 1 passes
+    (`needs: full-integration`), and only when `PROPAGATION_TOKEN` is present.
+  - **Purpose:** the *production action* — the only context that touches the
+    **real** repo. It runs in PR mode (`propagate_patch.sh .`, no fixture) to
+    create `propagate/<WI>/<branch>` branches and open genuine, reviewable PRs,
+    then notifies. PR mode means it never force-rewrites real branches.
+
+### 8.3 Where, when, and why each runs
+
+The local pipeline and Job 1 deliberately share the *same* generate → propagate
+(direct) → verify mechanism — so what you test locally is exactly what CI
+enforces. The difference is purely *when and for whom* it runs. Job 2 is the
+only context with a real-world effect.
+
+| Context | Where / when | Mode | Touches real repo? | Purpose |
+|---------|--------------|------|:---:|---------|
+| **Local pipeline** (`run_pipeline.sh`) | Your machine, on demand | direct (default) | No (fixture) | Developer's instant "did I break it?" check |
+| **Job 1** (`full-integration`) | Cloud runner, every push/PR/dispatch | direct (explicit) | No (fixture) | Automated must-pass correctness gate |
+| **Job 2** (`live-repo-prs`) | Cloud runner, after Job 1, if token set | pr | **Yes** — opens PRs | Actually deliver the fix via real PRs |
+
+In short: the first two exist to **build confidence that the propagation logic
+is correct** (one manually, one automatically), and only the third **uses** that
+trusted logic to change the real world.
 
 ---
 
