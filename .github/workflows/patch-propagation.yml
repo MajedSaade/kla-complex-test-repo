@@ -25,6 +25,9 @@ env:
   WI_ID: ${{ github.event.inputs.work_item || 'WI-440219' }}
   BRANCH_SELECT_MODE: ${{ github.event.inputs.branch_select_mode || 'wi-history' }}
 
+permissions:
+  contents: read
+
 jobs:
   # Self-contained: builds a fresh fixture, propagates, and verifies in one
   # checkout. Needs no secrets and is the gate that must always pass.
@@ -34,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Make scripts executable
         run: chmod +x generate_complex_repo.sh scripts/*.sh
@@ -97,10 +100,9 @@ jobs:
 
       - name: Checkout all branches
         if: steps.token.outputs.enabled == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          token: ${{ secrets.PROPAGATION_TOKEN }}
 
       - name: Configure git and GitHub CLI
         if: steps.token.outputs.enabled == 'true'
