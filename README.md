@@ -1,17 +1,36 @@
-# KLA Complex Test Repository
+# Cross-Branch Patch Propagation
 
-A self-contained fixture + tooling for **cross-branch patch propagation**. It
-builds a realistic 18-branch enterprise repository, finds a single "definitive
-fix" commit, and opens a pull request to propagate it to every branch that
-should receive it. Two rules decide who is eligible: the branch's **name must
-sort lexicographically after the branch that holds the fix**, and (by default)
-its history must mention the work item. Branches carry a **letter + number
-prefix** (e.g. `A14-bugfix/payment-patch`, `C1-feature/ledger-audit`,
-`G6-infra/kubernetes-config`) so this ordering is explicit and controllable —
-the byte-wise comparison works the same for letters as for digits, so a branch
-whose prefix sorts after the fix branch's prefix is "after" it. The
-fix is **always** proposed via a pull request — it is never cherry-picked
-directly onto a live branch.
+**Automatically propagate a bug-fix commit across every Git branch that should receive it.**
+
+Large teams often maintain one repository with many long-lived branches (payments, auth, infra, and so on). When a critical fix lands on one branch, the hard part is knowing **which other branches need the same change** and **how to apply it safely** without breaking anything.
+
+This project solves that with plain Bash and Git. It includes:
+
+1. **A synthetic test repo** — an 18-branch enterprise-style fixture built from scratch, with realistic conflicts, missing files, and branch ordering edge cases.
+2. **Propagation tooling** — scripts that find the definitive fix commit, decide which branches are eligible, cherry-pick the fix onto a propagation branch, open a pull request for each target, verify the outcome, and optionally email a report.
+
+Everything runs locally as a dry-run, or against a real GitHub repo via GitHub Actions.
+
+## Quick start
+
+```bash
+# Full local pipeline (generates fixture → propagates → verifies; no push or PRs)
+./scripts/run_pipeline.sh
+```
+
+For step-by-step instructions, see **[USER_MANUAL.md](USER_MANUAL.md)**.  
+For a full walkthrough of every file and function, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+
+## How it works (in brief)
+
+A bug is fixed on one branch (the **source branch**). The propagation script:
+
+1. Finds the newest commit on that branch tagged with a **work item** ID (e.g. `[WI-440219]`).
+2. Scans all branches and selects **eligible targets** — branches whose name sorts after the source branch and whose history mentions the work item.
+3. For each eligible branch, cherry-picks the fix onto a `propagate/<WI>/<branch>` branch and **opens a pull request** (never commits directly to the live branch).
+4. Skips or reports branches that conflict, are protected, are explicitly blocked, or don't qualify.
+
+Branch names use a **letter + number prefix** (e.g. `A14-bugfix/payment-patch`, `C1-feature/ledger-audit`) so eligibility ordering is explicit and deterministic.
 
 ## Layout
 
@@ -26,10 +45,6 @@ directly onto a live branch.
 | `.github/workflows/patch-propagation.yml` | CI: integration test + live PR opening |
 | `USER_MANUAL.md` | Hands-on operator's guide: how to run everything, step by step |
 | `ARCHITECTURE.md` | Detailed walkthrough of how everything works (with diagrams) |
-
-> New here? Read the **[USER_MANUAL.md](USER_MANUAL.md)** for a step-by-step guide
-> to running the system, or **[ARCHITECTURE.md](ARCHITECTURE.md)** for a full,
-> diagrammed explanation of every file, function, and how the pieces connect.
 
 ### Dynamic, with the "no hardcoding" guarantee
 
@@ -149,8 +164,6 @@ with `pull-requests: write`. The PR job therefore uses a Personal Access Token.
 
 If the secret is absent the **Live repo PRs** job is **skipped with a notice**
 instead of failing — so CI stays green either way.
-
-View open PRs: https://github.com/MajedSaade/kla-complex-test-repo/pulls
 
 ### Migrating the live repo to the letter scheme
 
